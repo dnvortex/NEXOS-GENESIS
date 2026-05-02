@@ -15,6 +15,7 @@
 #include "../../kernel/proc/scheduler.h"
 #include "../../kernel/mm/pmm.h"
 #include "../../kernel/drivers/rtl8139.h"
+#include "../../kernel/drivers/wifi.h"
 #include "../../kernel/net/icmp.h"
 #include "../../kernel/net/ethernet.h"
 #include "../../kernel/net/netif.h"
@@ -498,7 +499,8 @@ static int cmd_help(int argc, char *argv[]) {
     nsh_println("  tree [path]        ASCII directory tree");
     nsh_println("  memmap             Physical memory map");
     nsh_println("  ver                OS version and build info");
-    nsh_println("  ifconfig           Network interface status (RTL8139)");
+    nsh_println("  ifconfig           Network interface status");
+    nsh_println("  wifi scan|connect|disconnect|status  WiFi manager");
     nsh_println("  ping <ip>          Send ICMP echo requests");
     nsh_println("");
     nsh_println("Shell features:");
@@ -1035,6 +1037,82 @@ static int cmd_wget(int argc, char *argv[]) {
     return 0;
 }
 
+/* ── wifi ────────────────────────────────────────────────────────────────── */
+static int cmd_wifi(int argc, char *argv[]) {
+    if (argc < 2) {
+        nsh_println("wifi: usage:");
+        nsh_println("  wifi scan              - Scan for available networks");
+        nsh_println("  wifi connect <ssid> [pwd] - Connect to a network");
+        nsh_println("  wifi disconnect        - Disconnect");
+        nsh_println("  wifi status            - Show current status");
+        return 1;
+    }
+
+    /* wifi status */
+    if (nsh_strcmp(argv[1], "status") == 0) {
+        if (wifi_is_connected()) {
+            char buf[8];
+            nsh_print("wlan0  UP   SSID: "); nsh_println(wifi_get_ssid());
+            nsh_print("       Signal: "); nsh_uint_str((uint64_t)wifi_get_signal(), buf);
+            nsh_print(buf); nsh_println("%");
+            nsh_println("       inet 10.0.2.20  netmask 255.255.255.0  gw 10.0.2.2");
+        } else {
+            nsh_println("wlan0  DOWN  (not connected)");
+        }
+        return 0;
+    }
+
+    /* wifi scan */
+    if (nsh_strcmp(argv[1], "scan") == 0) {
+        nsh_println("Scanning for WiFi networks...");
+        wifi_ap_t aps[8];
+        int n = wifi_scan(aps, 8);
+        nsh_println("");
+        nsh_println("  SSID                  Signal  Security");
+        nsh_println("  ─────────────────────────────────────────");
+        for (int i = 0; i < n; i++) {
+            nsh_print("  ");
+            /* Left-pad SSID to 22 chars */
+            int sl = 0; while (aps[i].ssid[sl]) sl++;
+            nsh_print(aps[i].ssid);
+            for (int p = sl; p < 22; p++) nsh_putchar(' ');
+            char buf[8];
+            nsh_uint_str((uint64_t)aps[i].signal, buf); nsh_print(buf); nsh_print("%   ");
+            nsh_println(aps[i].encrypted ? "WPA2" : "Open");
+        }
+        return 0;
+    }
+
+    /* wifi connect */
+    if (nsh_strcmp(argv[1], "connect") == 0) {
+        if (argc < 3) { nsh_println("wifi connect: usage: wifi connect <ssid> [password]"); return 1; }
+        const char *ssid = argv[2];
+        const char *pass = argc >= 4 ? argv[3] : "";
+        nsh_print("Connecting to '"); nsh_print(ssid); nsh_println("'...");
+        if (wifi_connect(ssid, pass) == 0) {
+            nsh_print("Connected!  Signal: ");
+            char buf[8];
+            nsh_uint_str((uint64_t)wifi_get_signal(), buf);
+            nsh_print(buf); nsh_println("%");
+        } else {
+            nsh_print("wifi: SSID not found: '"); nsh_print(ssid); nsh_println("'");
+            nsh_println("  (run 'wifi scan' to see available networks)");
+            return 1;
+        }
+        return 0;
+    }
+
+    /* wifi disconnect */
+    if (nsh_strcmp(argv[1], "disconnect") == 0) {
+        wifi_disconnect();
+        nsh_println("Disconnected from WiFi");
+        return 0;
+    }
+
+    nsh_print("wifi: unknown command: "); nsh_println(argv[1]);
+    return 1;
+}
+
 /* ── netstat ──────────────────────────────────────────────────────────────── */
 static int cmd_netstat(int argc, char *argv[]) {
     (void)argc; (void)argv;
@@ -1255,6 +1333,7 @@ static int nsh_exec_builtin(int argc, char *argv[]) {
     if (nsh_strcmp(cmd,"dns")==0)      return cmd_dns(argc,argv);
     if (nsh_strcmp(cmd,"wget")==0)     return cmd_wget(argc,argv);
     if (nsh_strcmp(cmd,"netstat")==0)  return cmd_netstat(argc,argv);
+    if (nsh_strcmp(cmd,"wifi")==0)     return cmd_wifi(argc,argv);
 
     nsh_print("nsh: command not found: "); nsh_println(cmd);
     return 127;

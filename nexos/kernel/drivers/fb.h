@@ -72,3 +72,8 @@ void     fb_clear(uint32_t color);
 void     fb_scroll_up(int pixels, uint32_t bg_color);
 uint32_t fb_blend(uint32_t fg, uint32_t bg, uint8_t alpha);
 void     fb_copy_rect(int sx, int sy, int dx, int dy, int w, int h);
+/* Blend `color` over a rect at alpha opacity (0=transparent, 255=opaque)   */
+void     fb_fill_rect_blend(int x, int y, int w, int h,
+                             uint32_t color, uint8_t alpha);
+/* In-place box-blur with given radius (1-8) — used for glass effect         */
+void     fb_blur_rect(int x, int y, int w, int h, int radius);

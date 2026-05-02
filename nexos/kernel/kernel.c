@@ -20,6 +20,7 @@
 #include "fs/procfs.h"
 #include "net/net.h"
 #include "drivers/rtl8139.h"
+#include "drivers/wifi.h"
 #include "proc/process.h"
 #include "proc/scheduler.h"
 #include "proc/syscall.h"
@@ -334,9 +335,10 @@ void kernel_main(uint32_t mb2_magic, mb2_info_t *mb2_info) {
     /* ── 12. CMOS Real-Time Clock ─────────────────────────────────────────── */
     rtc_init();
 
-    /* ── 13. Network stub + RTL8139 ───────────────────────────────────────── */
+    /* ── 13. Network stack + RTL8139 + WiFi ──────────────────────────────── */
     net_init();
     rtl8139_init();
+    wifi_init();
 
     /* ── 14. VFS + ramfs ──────────────────────────────────────────────────── */
     vfs_init();

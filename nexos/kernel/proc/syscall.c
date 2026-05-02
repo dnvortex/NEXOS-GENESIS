@@ -877,6 +877,323 @@ uint64_t syscall_dispatch(uint64_t num, uint64_t a1, uint64_t a2, uint64_t a3,
         timer_sleep_ms((uint32_t)a1);
         return 0;
 
+    /* ════════════════════════════════════════════════════════════════════════
+     * ADDITIONAL POSIX / LINUX SYSCALLS
+     * ════════════════════════════════════════════════════════════════════════ */
+
+    /* ── 13/14/15: rt_sigaction / rt_sigprocmask / rt_sigreturn ─────────── */
+    case SYS_RT_SIGACTION:
+    case SYS_RT_SIGPROCMASK:
+    case SYS_RT_SIGRETURN:
+        return 0;   /* no signal delivery yet — safe stub */
+
+    /* ── 17: pread64(fd, buf, count, offset) ────────────────────────────── */
+    case SYS_PREAD64: {
+        int fd = (int)a1;
+        void *buf = (void *)a2;
+        size_t cnt = (size_t)a3;
+        uint64_t off = a4;
+        process_t *proc = proc_get_current();
+        if (!proc || fd < 0 || fd >= MAX_FDS || !proc->fds[fd]) RET_ERR(EBADF);
+        vfs_node_t *node = proc->fds[fd];
+        uint32_t n = vfs_read(node, off, (uint32_t)cnt, (uint8_t *)buf);
+        return (uint64_t)(int64_t)(int32_t)n;
+    }
+
+    /* ── 18: pwrite64(fd, buf, count, offset) ───────────────────────────── */
+    case SYS_PWRITE64: {
+        int fd = (int)a1;
+        const void *buf = (const void *)a2;
+        size_t cnt = (size_t)a3;
+        uint64_t off = a4;
+        process_t *proc = proc_get_current();
+        if (!proc || fd < 0 || fd >= MAX_FDS || !proc->fds[fd]) RET_ERR(EBADF);
+        vfs_node_t *node = proc->fds[fd];
+        uint32_t n = vfs_write(node, off, (uint32_t)cnt, (const uint8_t *)buf);
+        return (uint64_t)(int64_t)(int32_t)n;
+    }
+
+    /* ── 19: readv(fd, iovec[], iovcnt) ─────────────────────────────────── */
+    case SYS_READV: {
+        typedef struct { void *base; uint64_t len; } iovec_t;
+        int fd = (int)a1;
+        const iovec_t *iov = (const iovec_t *)a2;
+        int iovcnt = (int)a3;
+        process_t *proc = proc_get_current();
+        if (!proc || fd < 0 || fd >= MAX_FDS) RET_ERR(EBADF);
+        uint64_t total = 0;
+        for (int i = 0; i < iovcnt; i++) {
+            if (!iov[i].base || !iov[i].len) continue;
+            if (fd == 0) {
+                /* stdin: read one char at a time */
+                uint8_t *b = (uint8_t *)iov[i].base;
+                for (uint64_t j = 0; j < iov[i].len; j++) {
+                    char c = keyboard_getchar();
+                    b[j] = (uint8_t)c;
+                    if (c == '\n') { total += j + 1; goto readv_done; }
+                }
+                total += iov[i].len;
+            } else {
+                if (!proc->fds[fd]) { RET_ERR(EBADF); }
+                vfs_node_t *node = proc->fds[fd];
+                uint32_t n = vfs_read(node, proc->fd_offsets[fd],
+                                      (uint32_t)iov[i].len,
+                                      (uint8_t *)iov[i].base);
+                proc->fd_offsets[fd] += n;
+                total += n;
+            }
+        }
+        readv_done:
+        return total;
+    }
+
+    /* ── 20: writev(fd, iovec[], iovcnt) ────────────────────────────────── */
+    case SYS_WRITEV: {
+        typedef struct { const void *base; uint64_t len; } iovecw_t;
+        int fd = (int)a1;
+        const iovecw_t *iov = (const iovecw_t *)a2;
+        int iovcnt = (int)a3;
+        process_t *proc = proc_get_current();
+        uint64_t total = 0;
+        for (int i = 0; i < iovcnt; i++) {
+            if (!iov[i].base || !iov[i].len) continue;
+            const uint8_t *src = (const uint8_t *)iov[i].base;
+            uint32_t len = (uint32_t)iov[i].len;
+            if (fd == 1 || fd == 2) {
+                for (uint32_t j = 0; j < len; j++) vga_putchar(src[j]);
+                total += len;
+            } else if (proc && fd >= 0 && fd < MAX_FDS && proc->fds[fd]) {
+                uint32_t n = vfs_write(proc->fds[fd], proc->fd_offsets[fd],
+                                       len, src);
+                proc->fd_offsets[fd] += n;
+                total += n;
+            } else { RET_ERR(EBADF); }
+        }
+        return total;
+    }
+
+    /* ── 24: sched_yield() ───────────────────────────────────────────────── */
+    case SYS_SCHED_YIELD:
+        return 0;
+
+    /* ── 28: madvise(addr, len, advice) ─────────────────────────────────── */
+    case SYS_MADVISE:
+        return 0;   /* no-op stub: no demand paging yet */
+
+    /* ── 35: nanosleep(req*, rem*) ──────────────────────────────────────── */
+    case SYS_NANOSLEEP: {
+        linux_timespec_t *req = (linux_timespec_t *)a1;
+        if (!req) RET_ERR(EFAULT);
+        uint32_t ms = (uint32_t)(req->tv_sec * 1000 +
+                                  req->tv_nsec / 1000000LL);
+        if (ms > 0) timer_sleep_ms(ms);
+        return 0;
+    }
+
+    /* ── 36: getitimer() ────────────────────────────────────────────────── */
+    case SYS_GETITIMER:
+        return 0;
+
+    /* ── 40: sendfile(out_fd, in_fd, offset*, count) ────────────────────── */
+    case SYS_SENDFILE: {
+        int out_fd = (int)a1, in_fd = (int)a2;
+        uint64_t cnt = a4;
+        process_t *proc = proc_get_current();
+        if (!proc) RET_ERR(EBADF);
+        if (in_fd  < 0 || in_fd  >= MAX_FDS || !proc->fds[in_fd])  RET_ERR(EBADF);
+        if (out_fd < 0 || out_fd >= MAX_FDS || !proc->fds[out_fd]) RET_ERR(EBADF);
+        uint8_t tmp[512]; uint64_t total = 0;
+        while (total < cnt) {
+            uint32_t chunk = (uint32_t)(cnt - total);
+            if (chunk > 512) chunk = 512;
+            uint32_t n = vfs_read(proc->fds[in_fd],
+                                   proc->fd_offsets[in_fd], chunk, tmp);
+            if (!n) break;
+            proc->fd_offsets[in_fd] += n;
+            vfs_write(proc->fds[out_fd], proc->fd_offsets[out_fd], n, tmp);
+            proc->fd_offsets[out_fd] += n;
+            total += n;
+        }
+        return total;
+    }
+
+    /* ── 41-50: socket family stubs ─────────────────────────────────────── */
+    case SYS_SOCKET:
+    case SYS_CONNECT:
+    case SYS_ACCEPT:
+    case SYS_SENDTO:
+    case SYS_RECVFROM:
+    case SYS_BIND:
+    case SYS_LISTEN:
+        RET_ERR(ENOSYS);   /* networking via syscalls not yet wired */
+
+    /* ── 56: clone() ────────────────────────────────────────────────────── */
+    case SYS_CLONE:
+        RET_ERR(ENOSYS);
+
+    /* ── 62: kill(pid, sig) ─────────────────────────────────────────────── */
+    case SYS_KILL: {
+        int sig = (int)a2;
+        if (sig == 0) return 0;   /* probe-only, no signal delivery yet */
+        return 0;
+    }
+
+    /* ── 72: fcntl(fd, cmd, arg) ────────────────────────────────────────── */
+    case SYS_FCNTL: {
+        int fd  = (int)a1;
+        int cmd = (int)a2;
+        uint64_t arg = a3;
+        process_t *proc = proc_get_current();
+        if (!proc || fd < 0 || fd >= MAX_FDS) RET_ERR(EBADF);
+        #define F_DUPFD    0
+        #define F_GETFD    1
+        #define F_SETFD    2
+        #define F_GETFL    3
+        #define F_SETFL    4
+        #define O_RDWR     2
+        switch (cmd) {
+        case F_GETFD: return 0;
+        case F_SETFD: return 0;
+        case F_GETFL: return O_RDWR;
+        case F_SETFL: return 0;
+        case F_DUPFD: {
+            int minfd = (int)arg;
+            if (minfd < 0) minfd = 0;
+            for (int nfd = minfd; nfd < MAX_FDS; nfd++) {
+                if (!proc->fds[nfd]) {
+                    proc->fds[nfd]        = proc->fds[fd];
+                    proc->fd_offsets[nfd] = proc->fd_offsets[fd];
+                    return (uint64_t)(int64_t)nfd;
+                }
+            }
+            RET_ERR(ENFILE);
+        }
+        default: return 0;
+        }
+    }
+
+    /* ── 77: ftruncate(fd, length) ──────────────────────────────────────── */
+    case SYS_FTRUNCATE:
+        return 0;   /* VFS has no truncate yet — stub succeeds */
+
+    /* ── 97: getrlimit(resource, rlim*) ────────────────────────────────── */
+    case SYS_GETRLIMIT: {
+        typedef struct { uint64_t rlim_cur, rlim_max; } rlimit_t;
+        rlimit_t *rl = (rlimit_t *)a2;
+        if (!rl) RET_ERR(EFAULT);
+        rl->rlim_cur = 0xFFFFFFFFFFFFFFFFULL;  /* RLIM_INFINITY */
+        rl->rlim_max = 0xFFFFFFFFFFFFFFFFULL;
+        int res = (int)a1;
+        if (res == 7 /* RLIMIT_NOFILE */) {
+            rl->rlim_cur = MAX_FDS;
+            rl->rlim_max = MAX_FDS;
+        }
+        return 0;
+    }
+
+    /* ── 99: sysinfo(info*) ─────────────────────────────────────────────── */
+    case SYS_SYSINFO: {
+        typedef struct {
+            int64_t  uptime;
+            uint64_t loads[3];
+            uint64_t totalram, freeram, sharedram, bufferram;
+            uint64_t totalswap, freeswap;
+            uint16_t procs;
+            uint64_t totalhigh, freehigh;
+            uint32_t mem_unit;
+            char     _f[20 - 2 * sizeof(uint64_t) - sizeof(uint32_t)];
+        } __attribute__((packed)) sysinfo_t;
+        sysinfo_t *si = (sysinfo_t *)a1;
+        if (!si) RET_ERR(EFAULT);
+        sc_memzero(si, sizeof(*si));
+        si->uptime   = (int64_t)timer_get_uptime_seconds();
+        si->totalram = (uint64_t)pmm_get_free_frames() * 2 * 4096ULL;
+        si->freeram  = (uint64_t)pmm_get_free_frames()  * 4096ULL;
+        si->mem_unit = 1;
+        si->procs    = 1;
+        return 0;
+    }
+
+    /* ── 131: sigaltstack ───────────────────────────────────────────────── */
+    case SYS_SIGALTSTACK:
+        return 0;
+
+    /* ── 157: prctl(option, arg2 …) ────────────────────────────────────── */
+    case SYS_PRCTL: {
+        int opt = (int)a1;
+        if (opt == 15 /* PR_SET_NAME */) return 0;
+        if (opt == 16 /* PR_GET_NAME */) {
+            char *name = (char *)a2;
+            if (name) sc_strcpy(name, "nexos", 16);
+            return 0;
+        }
+        return 0;
+    }
+
+    /* ── 158: arch_prctl(code, addr) ────────────────────────────────────── */
+    case SYS_ARCH_PRCTL: {
+        int     code = (int)a1;
+        uint64_t addr = a2;
+        #define ARCH_SET_GS 0x1001
+        #define ARCH_SET_FS 0x1002
+        #define ARCH_GET_FS 0x1003
+        #define ARCH_GET_GS 0x1004
+        if (code == ARCH_SET_FS) {
+            __asm__ volatile("wrmsr"
+                :: "c"(0xC0000100U),
+                   "a"((uint32_t)addr),
+                   "d"((uint32_t)(addr >> 32)));
+            return 0;
+        }
+        if (code == ARCH_SET_GS) {
+            __asm__ volatile("wrmsr"
+                :: "c"(0xC0000101U),
+                   "a"((uint32_t)addr),
+                   "d"((uint32_t)(addr >> 32)));
+            return 0;
+        }
+        if (code == ARCH_GET_FS) {
+            uint32_t lo, hi;
+            __asm__ volatile("rdmsr"
+                : "=a"(lo), "=d"(hi) : "c"(0xC0000100U));
+            *(uint64_t *)addr = ((uint64_t)hi << 32) | lo;
+            return 0;
+        }
+        if (code == ARCH_GET_GS) {
+            uint32_t lo, hi;
+            __asm__ volatile("rdmsr"
+                : "=a"(lo), "=d"(hi) : "c"(0xC0000101U));
+            *(uint64_t *)addr = ((uint64_t)hi << 32) | lo;
+            return 0;
+        }
+        RET_ERR(EINVAL);
+    }
+
+    /* ── 202: futex(uaddr, op, val, …) ─────────────────────────────────── */
+    case SYS_FUTEX: {
+        int op = (int)a2 & ~128; /* strip FUTEX_PRIVATE_FLAG */
+        if (op == 1 /* FUTEX_WAKE */) return 0;   /* no threads → 0 woken */
+        if (op == 0 /* FUTEX_WAIT */) return 0;   /* not blocking (single-threaded) */
+        return 0;
+    }
+
+    /* ── 218: set_tid_address(tidptr) ───────────────────────────────────── */
+    case SYS_SET_TID_ADDRESS: {
+        process_t *proc = proc_get_current();
+        return proc ? (uint64_t)(uint32_t)proc->pid : 1;
+    }
+
+    /* ── 231: exit_group(status) ────────────────────────────────────────── */
+    case SYS_EXIT_GROUP: {
+        process_t *proc = proc_get_current();
+        if (proc) proc_exit((int)a1);
+        return 0;
+    }
+
+    /* ── 273: set_robust_list ───────────────────────────────────────────── */
+    case SYS_SET_ROBUST_LIST:
+        return 0;
+
     /* ── Unknown ─────────────────────────────────────────────────────────── */
     default:
         klog(LOG_WARN, "syscall: unknown number %llu (a1=%llx)", num, a1);

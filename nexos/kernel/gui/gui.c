@@ -144,6 +144,9 @@ void gui_main(void) {
         int released    = !left && prev_left;
 
         if (left_click || right_click || mx != prev_mx || my != prev_my) {
+            /* Forward mouse position to launcher for hover highlighting */
+            if (launcher_is_visible())
+                launcher_handle_mouse(mx, my);
             if (launcher_is_visible() && left_click) {
                 launcher_handle_click(mx, my);
             } else if (right_click && my < tb_y) {

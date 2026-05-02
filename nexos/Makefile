@@ -23,12 +23,12 @@ KERNEL_ELF = $(BUILD)/nexos.kernel
 ISO_FILE   = $(BUILD)/nexos.iso
 
 CFLAGS = -std=c11 -ffreestanding -fno-stack-protector -fno-pic \
-	 -mno-red-zone -mno-mmx -mno-sse -mno-sse2 \
-	 -Wall -Wextra -O2 -m64 -mcmodel=kernel \
-	 -nostdlib -nostdinc \
-	 -I$(ROOT) -I$(KERNEL) -I$(KERNEL)/include \
-	 -I$(KERNEL)/gui -I$(KERNEL)/drivers \
-	 -Wno-unused-parameter -Wno-unused-variable
+	-mno-red-zone -mno-mmx -mno-sse -mno-sse2 \
+	-Wall -Wextra -O2 -m64 -mcmodel=kernel \
+	-nostdlib -nostdinc \
+	-I$(ROOT) -I$(KERNEL) -I$(KERNEL)/include \
+	-I$(KERNEL)/gui -I$(KERNEL)/drivers \
+	-Wno-unused-parameter -Wno-unused-variable
 
 ASFLAGS = -f elf64
 
@@ -48,6 +48,7 @@ KERNEL_C_SOURCES = \
     $(KERNEL)/drivers/pci.c \
     $(KERNEL)/drivers/rtl8139.c \
     $(KERNEL)/drivers/rtc.c \
+    $(KERNEL)/drivers/wifi.c \
     $(KERNEL)/mm/pmm.c \
     $(KERNEL)/mm/heap.c \
     $(KERNEL)/mm/vmm.c \

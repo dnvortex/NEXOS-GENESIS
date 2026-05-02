@@ -11,7 +11,7 @@ typedef struct {
     uint8_t  header_type;
 } pci_device_t;
 
-#define PCI_MAX_DEVICES 64
+#define PCI_MAX_DEVICES 128
 
 extern pci_device_t pci_devices[];
 extern int pci_device_count;
