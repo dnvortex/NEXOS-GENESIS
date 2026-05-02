@@ -1,116 +1,115 @@
-/* NexOS — kernel/mm/heap.c | Free-list kernel heap | MIT License */
+/* NexOS — kernel/mm/heap.c | Free-list kernel heap | MIT License
+ *
+ * Simple singly-linked free-list allocator.
+ * No prev pointer → no backward-merge bug.  Forward-only coalescing is
+ * sufficient for a kernel that rarely frees large contiguous regions.
+ *
+ * Block layout (24 bytes on x86_64):
+ *   [0..7 ] size_t  size   — bytes of usable data (header NOT included)
+ *   [8    ] uint8_t free   — 1 = free, 0 = used  (+7 pad → align next)
+ *   [16..23] heap_block_t *next
+ *
+ * heap_init zeroes the entire data area so no stale pointer garbage can
+ * corrupt the list after the first allocation.
+ */
 #include "heap.h"
 #include "../kernel.h"
 
-typedef struct block_header {
-    size_t size;
-    int    free;
-    struct block_header *next;
-    struct block_header *prev;
-} block_header_t;
+typedef struct heap_block {
+    size_t           size;   /* usable bytes after header */
+    uint8_t          free;   /* 1 = free, 0 = used */
+    struct heap_block *next; /* next block (NULL = last) */
+} heap_block_t;
 
-#define BLOCK_HDR_SIZE sizeof(block_header_t)
-
-static block_header_t *heap_start = NULL;
-static block_header_t *heap_end   = NULL;
+static heap_block_t *heap_head = NULL;
+static uint8_t      *heap_end  = NULL;
 
 void heap_init(void *start, size_t size) {
-    heap_start = (block_header_t *)start;
-    heap_start->size = size - BLOCK_HDR_SIZE;
-    heap_start->free = 1;
-    heap_start->next = NULL;
-    heap_start->prev = NULL;
-    heap_end = heap_start;
-    klog(LOG_INFO, "Heap: initialized at 0x%p, size=%u KB",
-         (uint64_t)(uintptr_t)start, (unsigned)(size / 1024));
-}
+    heap_head = (heap_block_t *)start;
+    heap_head->size = size - sizeof(heap_block_t);
+    heap_head->free = 1;
+    heap_head->next = NULL;
+    heap_end = (uint8_t *)start + size;
 
-static void split_block(block_header_t *blk, size_t size) {
-    if (blk->size >= size + BLOCK_HDR_SIZE + 16) {
-        block_header_t *new_blk = (block_header_t *)((uint8_t *)blk + BLOCK_HDR_SIZE + size);
-        new_blk->size = blk->size - size - BLOCK_HDR_SIZE;
-        new_blk->free = 1;
-        new_blk->next = blk->next;
-        new_blk->prev = blk;
-        if (blk->next) blk->next->prev = new_blk;
-        blk->next = new_blk;
-        blk->size = size;
-        if (heap_end == blk) heap_end = new_blk;
-    }
+    /* Zero the data area: ensures no stale values masquerade as pointers */
+    uint8_t *data = (uint8_t *)start + sizeof(heap_block_t);
+    for (size_t i = 0; i < heap_head->size; i++) data[i] = 0;
+
+    klog(LOG_INFO, "Heap: 0x%x – 0x%x (%u MB), header=%u B",
+         (uint64_t)(uintptr_t)start,
+         (uint64_t)(uintptr_t)heap_end,
+         (unsigned)(size >> 20),
+         (unsigned)sizeof(heap_block_t));
 }
 
 void *kmalloc(size_t size) {
-    if (!size) return NULL;
-    size = ALIGN_UP(size, 8);
+    if (size == 0) return NULL;
+    /* align to 8 bytes */
+    size = (size + 7) & ~(size_t)7;
 
-    block_header_t *blk = heap_start;
-    while (blk) {
-        if (blk->free && blk->size >= size) {
-            split_block(blk, size);
-            blk->free = 0;
-            return (void *)((uint8_t *)blk + BLOCK_HDR_SIZE);
+    heap_block_t *curr = heap_head;
+    while (curr) {
+        if (curr->free && curr->size >= size) {
+            /* Split only if the remainder can hold a header + ≥8 bytes */
+            if (curr->size >= size + sizeof(heap_block_t) + 8) {
+                heap_block_t *newb = (heap_block_t *)
+                    ((uint8_t *)curr + sizeof(heap_block_t) + size);
+                newb->size = curr->size - size - sizeof(heap_block_t);
+                newb->free = 1;
+                newb->next = curr->next;
+                curr->size = size;
+                curr->next = newb;
+            }
+            curr->free = 0;
+            return (void *)((uint8_t *)curr + sizeof(heap_block_t));
         }
-        blk = blk->next;
+        curr = curr->next;
     }
+
     klog(LOG_ERROR, "Heap: kmalloc(%u) failed — out of memory", (unsigned)size);
     return NULL;
 }
 
-static void merge_free(block_header_t *blk) {
-    if (blk->next && blk->next->free) {
-        blk->size += BLOCK_HDR_SIZE + blk->next->size;
-        if (heap_end == blk->next) heap_end = blk;
-        blk->next = blk->next->next;
-        if (blk->next) blk->next->prev = blk;
-    }
-    if (blk->prev && blk->prev->free) {
-        blk->prev->size += BLOCK_HDR_SIZE + blk->size;
-        blk->prev->next = blk->next;
-        if (blk->next) blk->next->prev = blk->prev;
-        if (heap_end == blk) heap_end = blk->prev;
-    }
-}
-
 void kfree(void *ptr) {
     if (!ptr) return;
-    block_header_t *blk = (block_header_t *)((uint8_t *)ptr - BLOCK_HDR_SIZE);
-    blk->free = 1;
-    merge_free(blk);
+    heap_block_t *block = (heap_block_t *)((uint8_t *)ptr - sizeof(heap_block_t));
+    block->free = 1;
+    /* Forward coalesce only — avoids double-merge corruption from prev ptr */
+    if (block->next && block->next->free) {
+        block->size += sizeof(heap_block_t) + block->next->size;
+        block->next  = block->next->next;
+    }
 }
 
 void *krealloc(void *ptr, size_t size) {
-    if (!ptr) return kmalloc(size);
+    if (!ptr)  return kmalloc(size);
     if (!size) { kfree(ptr); return NULL; }
-
-    block_header_t *blk = (block_header_t *)((uint8_t *)ptr - BLOCK_HDR_SIZE);
-    if (blk->size >= size) return ptr;
-
-    void *new_ptr = kmalloc(size);
-    if (!new_ptr) return NULL;
-
+    heap_block_t *block = (heap_block_t *)((uint8_t *)ptr - sizeof(heap_block_t));
+    if (block->size >= size) return ptr;
+    void *newptr = kmalloc(size);
+    if (!newptr) return NULL;
     uint8_t *src = (uint8_t *)ptr;
-    uint8_t *dst = (uint8_t *)new_ptr;
-    size_t copy_size = blk->size < size ? blk->size : size;
-    for (size_t i = 0; i < copy_size; i++) dst[i] = src[i];
+    uint8_t *dst = (uint8_t *)newptr;
+    size_t   n   = block->size < size ? block->size : size;
+    for (size_t i = 0; i < n; i++) dst[i] = src[i];
     kfree(ptr);
-    return new_ptr;
+    return newptr;
 }
 
 void *kmalloc_aligned(size_t size, size_t align) {
-    /* Simple approach: allocate extra and align manually */
     void *ptr = kmalloc(size + align);
     if (!ptr) return NULL;
-    uintptr_t addr = (uintptr_t)ptr;
-    uintptr_t aligned = ALIGN_UP(addr, align);
+    uintptr_t addr    = (uintptr_t)ptr;
+    uintptr_t aligned = (addr + align - 1) & ~(align - 1);
     return (void *)aligned;
 }
 
 size_t heap_free_space(void) {
     size_t total = 0;
-    block_header_t *blk = heap_start;
-    while (blk) {
-        if (blk->free) total += blk->size;
-        blk = blk->next;
+    heap_block_t *curr = heap_head;
+    while (curr) {
+        if (curr->free) total += curr->size;
+        curr = curr->next;
     }
     return total;
 }

@@ -66,14 +66,21 @@ static void setup_dev(void) {
     klog(LOG_INFO, "init: /dev populated");
 }
 
-static void try_mount_disk(void) {
+/* Returns 0 on success, -1 if no FAT32 disk found or mount failed.
+ * Failure is non-fatal: the shell still works with ramfs only. */
+static int try_mount_disk(void) {
+    klog(LOG_INFO, "init: attempting FAT32 mount on ATA master...");
     vfs_node_t *fat_root = fat32_mount(ATA_PRIMARY_MASTER, 0);
-    if (fat_root) {
-        vfs_mount("/mnt", fat_root);
-        klog(LOG_INFO, "init: FAT32 disk mounted at /mnt");
-    } else {
-        klog(LOG_WARN, "init: No FAT32 disk found, running from ramfs only");
+    if (!fat_root) {
+        klog(LOG_WARN, "init: no disk or FAT32 failed — running from ramfs only");
+        return -1;
     }
+    if (vfs_mount("/mnt", fat_root) < 0) {
+        klog(LOG_WARN, "init: FAT32 mount point /mnt not available");
+        return -1;
+    }
+    klog(LOG_INFO, "init: disk mounted at /mnt");
+    return 0;
 }
 
 static void reap_zombies(void) {
@@ -96,14 +103,22 @@ void init_main(void) {
 
     /* Create mount/tmp dirs BEFORE try_mount_disk so vfs_mount("/mnt",...)
      * finds an existing directory to overlay.  Without this, fat32_mount
-     * allocates ~1 KB then vfs_mount fails silently (no mount point), leaking
-     * that memory and leaving /mnt absent for the shell. */
+     * allocates ~1 KB then vfs_mount fails silently (no mount point). */
     vfs_mkdir("/mnt");
     vfs_mkdir("/tmp");
 
     setup_etc();
+    klog(LOG_INFO, "init: heap after etc  = %u KB",
+         (unsigned)(heap_free_space() / 1024));
+
     setup_dev();
+    klog(LOG_INFO, "init: heap after dev  = %u KB",
+         (unsigned)(heap_free_space() / 1024));
+
     try_mount_disk();
+    klog(LOG_INFO, "init: heap after mount = %u KB",
+         (unsigned)(heap_free_space() / 1024));
+
     /* /proc is already mounted by procfs_init() in kernel_main */
 
     klog(LOG_INFO, "init: launching shell (nsh)");

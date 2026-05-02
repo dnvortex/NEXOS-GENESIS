@@ -1,0 +1,224 @@
+NexOS heap reports 8179 KB free at init start but then immediately 
+fails with kmalloc(40) out of memory and crashes with RIP=0x3.
+
+This means the heap HAS memory but the allocator cannot find/split 
+free blocks. The free-list walk in heap_free_space() works but 
+the allocation path in kmalloc() is broken.
+
+Read kernel/mm/heap.c in FULL before changing anything.
+Read kernel/kernel.c heap_init() call.
+Read kernel/mm/heap.h.
+Then fix ALL of the following in one pass:
+
+════════════════════════════════════════
+FIX 1 — Rewrite heap allocator from scratch (safe minimal version)
+════════════════════════════════════════
+Replace the existing heap allocator with this proven simple 
+bump+freelist allocator that cannot have the block-corruption bug:
+
+In kernel/mm/heap.c, implement exactly this:
+
+  typedef struct heap_block {
+      size_t size;           // size of data area (not including header)
+      uint8_t free;          // 1 = free, 0 = used
+      struct heap_block *next; // next block in list (NULL = last)
+  } heap_block_t;
+
+  static heap_block_t *heap_head = NULL;
+  static uint8_t *heap_end = NULL;
+
+  void heap_init(void *start, size_t size) {
+      heap_head = (heap_block_t *)start;
+      heap_head->size = size - sizeof(heap_block_t);
+      heap_head->free = 1;
+      heap_head->next = NULL;
+      heap_end = (uint8_t *)start + size;
+      // zero the data area
+      uint8_t *data = (uint8_t *)start + sizeof(heap_block_t);
+      for (size_t i = 0; i < heap_head->size; i++) data[i] = 0;
+  }
+
+  void *kmalloc(size_t size) {
+      if (size == 0) return NULL;
+      // align size to 8 bytes
+      size = (size + 7) & ~7;
+      
+      heap_block_t *curr = heap_head;
+      while (curr) {
+          if (curr->free && curr->size >= size) {
+              // split block if remainder is big enough
+              if (curr->size >= size + sizeof(heap_block_t) + 8) {
+                  heap_block_t *newb = (heap_block_t *)
+                      ((uint8_t *)curr + sizeof(heap_block_t) + size);
+                  newb->size = curr->size - size - sizeof(heap_block_t);
+                  newb->free = 1;
+                  newb->next = curr->next;
+                  curr->size = size;
+                  curr->next = newb;
+              }
+              curr->free = 0;
+              return (void *)((uint8_t *)curr + sizeof(heap_block_t));
+          }
+          curr = curr->next;
+      }
+      klog(ERROR, "Heap: kmalloc(%d) failed - out of memory", (int)size);
+      return NULL;
+  }
+
+  void kfree(void *ptr) {
+      if (!ptr) return;
+      heap_block_t *block = (heap_block_t *)
+          ((uint8_t *)ptr - sizeof(heap_block_t));
+      block->free = 1;
+      // coalesce with next if also free
+      if (block->next && block->next->free) {
+          block->size += sizeof(heap_block_t) + block->next->size;
+          block->next = block->next->next;
+      }
+  }
+
+  void *krealloc(void *ptr, size_t size) {
+      if (!ptr) return kmalloc(size);
+      if (!size) { kfree(ptr); return NULL; }
+      heap_block_t *block = (heap_block_t *)
+          ((uint8_t *)ptr - sizeof(heap_block_t));
+      if (block->size >= size) return ptr;
+      void *newptr = kmalloc(size);
+      if (!newptr) return NULL;
+      uint8_t *src = (uint8_t *)ptr;
+      uint8_t *dst = (uint8_t *)newptr;
+      for (size_t i = 0; i < block->size; i++) dst[i] = src[i];
+      kfree(ptr);
+      return newptr;
+  }
+
+  size_t heap_free_space(void) {
+      size_t total = 0;
+      heap_block_t *curr = heap_head;
+      while (curr) {
+          if (curr->free) total += curr->size;
+          curr = curr->next;
+      }
+      return total;
+  }
+
+════════════════════════════════════════
+FIX 2 — Heap placement: use fixed safe address
+════════════════════════════════════════
+In kernel/kernel.c, call heap_init with:
+  #define HEAP_START ((void*)0x1200000)   // 18MB — inside 32MB map
+  #define HEAP_SIZE  (8 * 1024 * 1024)    // 8MB
+  heap_init(HEAP_START, HEAP_SIZE);
+
+In pmm.c, reserve it:
+  pmm_deinit_region(0x1200000, 8 * 1024 * 1024);
+
+Make sure HEAP_START and HEAP_SIZE are defined consistently 
+in kernel/mm/heap.h so all files see the same values.
+
+════════════════════════════════════════
+FIX 3 — NULL guard every kmalloc call in fat32.c
+════════════════════════════════════════
+Read kernel/fs/fat32.c fully.
+The kmalloc(40) failure is for sizeof(fat32_volume_t) = 40 bytes.
+fat32_mount() allocates this and then accesses it.
+
+Add at the top of fat32_mount():
+  fat32_volume_t *vol = kmalloc(sizeof(fat32_volume_t));
+  if (!vol) {
+      klog(ERROR, "fat32: cannot allocate volume struct");
+      return NULL;
+  }
+  memset(vol, 0, sizeof(fat32_volume_t));
+
+Do the same for EVERY kmalloc in fat32.c.
+
+════════════════════════════════════════
+FIX 4 — NULL guard every kmalloc in ramfs.c, vfs.c, procfs.c
+════════════════════════════════════════
+Read each file and after every kmalloc add:
+  if (!ptr) {
+      klog(ERROR, "<file>: kmalloc failed for <what>");
+      return NULL; // or -1, or 0
+  }
+Do NOT proceed to use the pointer if it is NULL.
+
+════════════════════════════════════════
+FIX 5 — NULL guard every kmalloc in nsh.c
+════════════════════════════════════════
+Read userspace/shell/nsh.c fully.
+After every kmalloc/malloc in nsh.c add a NULL check.
+If nsh cannot allocate something critical (like command 
+history buffer), log a warning and continue without it 
+rather than crashing.
+
+════════════════════════════════════════
+FIX 6 — init.c: make FAT32 mount optional
+════════════════════════════════════════
+In userspace/init/init.c, wrap try_mount_disk() so failure 
+is non-fatal. If FAT32 mount fails, log a warning and 
+continue — the shell still works with ramfs only:
+
+  klog(INFO, "init: attempting FAT32 mount...");
+  int mount_ok = try_mount_disk();
+  if (mount_ok < 0) {
+      klog(WARN, "init: no disk or FAT32 failed - running from ramfs only");
+  } else {
+      klog(INFO, "init: disk mounted at /mnt");
+  }
+
+════════════════════════════════════════
+FIX 7 — Add heap stats log after every major allocation phase
+════════════════════════════════════════
+In init_main(), add klog after each setup phase:
+
+  klog(INFO, "init: heap free = %d KB", heap_free_space()/1024);
+  setup_dev();
+  klog(INFO, "init: heap after dev = %d KB", heap_free_space()/1024);
+  setup_etc();
+  klog(INFO, "init: heap after etc = %d KB", heap_free_space()/1024);
+  try_mount_disk();
+  klog(INFO, "init: heap after mount = %d KB", heap_free_space()/1024);
+  // then launch nsh
+
+════════════════════════════════════════
+FIX 8 — Reduce fat32 directory scan buffer
+════════════════════════════════════════
+In kernel/fs/fat32.c, find MAX_DIR_ENTRIES.
+Set it to 32 (not 64 or 512):
+  #define MAX_DIR_ENTRIES 32
+Each fat32_finddir call allocates MAX_DIR_ENTRIES * sizeof(vfs_node_t).
+At 360 bytes per node, 32 entries = 11.5 KB per call vs 184 KB at 512.
+
+════════════════════════════════════════
+FIX 9 — Verify boot.asm 32MB identity map is still in place
+════════════════════════════════════════
+Run: grep -A 20 "PD\[0\]\|boot_pd\|identity" nexos/kernel/arch/x86_64/boot.asm
+Confirm the loop maps 16 entries (0-32MB).
+If the loop is missing, re-add it:
+
+  mov ecx, 16
+  xor eax, eax
+  mov ebx, 0x000083    ; present + writable + huge (2MB page)
+  mov edi, boot_pd
+.map_loop:
+  mov [edi], ebx
+  add ebx, 0x200000    ; next 2MB
+  add edi, 8
+  loop .map_loop
+
+════════════════════════════════════════
+AFTER ALL FIXES — Build and verify
+════════════════════════════════════════
+1. Run make clean && make all
+2. Show output of: size build/nexos.kernel
+   (text, data, bss sizes)
+3. Show: grep -n "HEAP_START\|HEAP_SIZE\|heap_init" nexos/kernel/mm/heap.c nexos/kernel/kernel.c
+4. Show the complete new kmalloc() function
+5. Confirm nexos.iso rebuilt
+6. Expected boot result:
+   [INFO] init: heap free = 8179 KB
+   [INFO] init: heap after dev = ~8100 KB  
+   [INFO] init: heap after etc = ~8050 KB
+   [INFO] init: heap after mount = ~7900 KB
+   [root@nexos /]$
