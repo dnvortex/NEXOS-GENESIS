@@ -262,28 +262,52 @@ static int fat32_readdir(vfs_node_t *node, uint32_t idx, vfs_dirent_t *dirent) {
 }
 
 vfs_node_t *fat32_mount(int drive, uint32_t lba_start) {
+    /*
+     * sector_buf MUST be allocated first and used as the BPB read target.
+     * sizeof(fat32_bpb_t) = 90 bytes but ata_read_sectors ALWAYS transfers
+     * a full 512-byte sector (256 × inw).  Reading into a local fat32_bpb_t
+     * on the stack overflows 422 bytes, corrupting saved return addresses and
+     * causing the #UD / RIP=0x3 crash observed at runtime.
+     */
     sector_buf = (uint8_t *)kmalloc(SECTOR_SIZE);
-    if (!sector_buf) return NULL;
+    if (!sector_buf) {
+        klog(LOG_ERROR, "FAT32: cannot allocate sector buffer");
+        return NULL;
+    }
 
-    fat32_bpb_t bpb;
-    if (ata_read_sectors(drive, lba_start, 1, &bpb) < 0) {
+    if (ata_read_sectors(drive, lba_start, 1, sector_buf) < 0) {
         klog(LOG_ERROR, "FAT32: failed to read BPB from drive %d LBA %u", drive, lba_start);
-        kfree(sector_buf);
+        kfree(sector_buf); sector_buf = NULL;
+        return NULL;
+    }
+
+    /* Access BPB fields through a pointer — no copy, no stack overflow */
+    fat32_bpb_t *bpb = (fat32_bpb_t *)sector_buf;
+
+    /* Validate key BPB fields: a zeroed or garbage sector means no FAT32 */
+    if (bpb->bytes_per_sector == 0 || bpb->sectors_per_cluster == 0 ||
+        bpb->fat_size_32 == 0    || bpb->root_cluster < 2) {
+        klog(LOG_WARN, "FAT32: drive %d BPB invalid (no FAT32 or no disk)", drive);
+        kfree(sector_buf); sector_buf = NULL;
         return NULL;
     }
 
     fat32_volume_t *vol = (fat32_volume_t *)kmalloc(sizeof(fat32_volume_t));
-    if (!vol) { kfree(sector_buf); return NULL; }
+    if (!vol) {
+        klog(LOG_ERROR, "FAT32: cannot allocate volume struct");
+        kfree(sector_buf); sector_buf = NULL;
+        return NULL;
+    }
 
     vol->drive              = drive;
     vol->lba_start          = lba_start;
-    vol->bytes_per_sector   = bpb.bytes_per_sector;
-    vol->sectors_per_cluster= bpb.sectors_per_cluster;
-    vol->bytes_per_cluster  = bpb.bytes_per_sector * bpb.sectors_per_cluster;
-    vol->fat_start          = bpb.reserved_sectors;
-    vol->fat_size           = bpb.fat_size_32;
-    vol->data_start         = bpb.reserved_sectors + bpb.fat_count * bpb.fat_size_32;
-    vol->root_cluster       = bpb.root_cluster;
+    vol->bytes_per_sector   = bpb->bytes_per_sector;
+    vol->sectors_per_cluster= bpb->sectors_per_cluster;
+    vol->bytes_per_cluster  = bpb->bytes_per_sector * bpb->sectors_per_cluster;
+    vol->fat_start          = bpb->reserved_sectors;
+    vol->fat_size           = bpb->fat_size_32;
+    vol->data_start         = bpb->reserved_sectors + bpb->fat_count * bpb->fat_size_32;
+    vol->root_cluster       = bpb->root_cluster;
 
     klog(LOG_INFO, "FAT32: mounted drive %d, root cluster=%u", drive, vol->root_cluster);
 
