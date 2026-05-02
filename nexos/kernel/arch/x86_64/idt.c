@@ -237,7 +237,7 @@ void isr_handler(registers_t *regs) {
     vga_set_color(VGA_COLOR_RED, VGA_COLOR_BLACK);
     vga_puts("\n\n*** KERNEL EXCEPTION ***\n");
     vga_puts(exception_names[vec < 32 ? vec : 0]);
-    vga_puts(" — System Halted\n");
+    vga_puts(" - System Halted\n");
     vga_set_color(VGA_COLOR_LIGHT_GREY, VGA_COLOR_BLACK);
 
     cli();

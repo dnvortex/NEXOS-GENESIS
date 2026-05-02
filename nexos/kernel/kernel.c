@@ -86,36 +86,47 @@ void klog(log_level_t level, const char *fmt, ...) {
     while (*f && bi < 510) {
         if (*f != '%') { buf[bi++] = *f++; continue; }
         f++;
+        /* width + zero-pad prefix: e.g. %02x, %8d */
+        char kpad = ' '; int kwid = 0;
+        if (*f == '0') { kpad = '0'; f++; }
+        while (*f >= '0' && *f <= '9') { kwid = kwid*10 + (*f - '0'); f++; }
         switch (*f) {
         case 'd': { int64_t v = va_arg(args,int64_t);
             if(v<0){buf[bi++]='-';v=-v;} char t[20];int ti=0;
             do{t[ti++]='0'+(int)(v%10);v/=10;}while(v);
+            while(ti<kwid&&bi<510){buf[bi++]=kpad;kwid--;}
             while(ti>0&&bi<510){buf[bi++]=t[--ti];} break; }
         case 'u': { uint64_t v=va_arg(args,uint64_t); char t[20];int ti=0;
             do{t[ti++]='0'+(int)(v%10);v/=10;}while(v);
+            while(ti<kwid&&bi<510){buf[bi++]=kpad;kwid--;}
             while(ti>0&&bi<510){buf[bi++]=t[--ti];} break; }
         case 'x': { uint64_t v=va_arg(args,uint64_t);
             const char *hx="0123456789abcdef"; char t[16];int ti=0;
             do{t[ti++]=hx[v&0xF];v>>=4;}while(v);
+            while(ti<kwid&&bi<510){buf[bi++]=kpad;kwid--;}
             while(ti>0&&bi<510){buf[bi++]=t[--ti];} break; }
         case 's': { const char *s=va_arg(args,const char*); if(!s)s="(null)";
             while(*s&&bi<510){buf[bi++]=*s++;} break; }
         case 'p': { uint64_t v=va_arg(args,uint64_t); buf[bi++]='0';buf[bi++]='x';
             const char *hx="0123456789abcdef";char t[16];int ti=0;
             do{t[ti++]=hx[v&0xF];v>>=4;}while(v);
+            while(ti<16&&bi<510){buf[bi++]='0';ti++;} /* always 16-digit ptr */
             while(ti>0&&bi<510){buf[bi++]=t[--ti];} break; }
         case 'l': { f++;
             if(*f=='l') f++;
             if(*f=='u'){uint64_t v=va_arg(args,uint64_t);char t[20];int ti=0;
                 do{t[ti++]='0'+(int)(v%10);v/=10;}while(v);
+                while(ti<kwid&&bi<510){buf[bi++]=kpad;kwid--;}
                 while(ti>0&&bi<510){buf[bi++]=t[--ti];}}
             else if(*f=='x'){uint64_t v=va_arg(args,uint64_t);
                 const char *hx="0123456789abcdef";char t[16];int ti=0;
                 do{t[ti++]=hx[v&0xF];v>>=4;}while(v);
+                while(ti<kwid&&bi<510){buf[bi++]=kpad;kwid--;}
                 while(ti>0&&bi<510){buf[bi++]=t[--ti];}}
             else if(*f=='d'){int64_t v=va_arg(args,int64_t);
                 if(v<0){buf[bi++]='-';v=-v;}char t[20];int ti=0;
                 do{t[ti++]='0'+(int)(v%10);v/=10;}while(v);
+                while(ti<kwid&&bi<510){buf[bi++]=kpad;kwid--;}
                 while(ti>0&&bi<510){buf[bi++]=t[--ti];}}
             break; }
         case '%': buf[bi++]='%'; break;
@@ -134,7 +145,7 @@ void klog(log_level_t level, const char *fmt, ...) {
 
 void kpanic(const char *fmt, ...) {
     (void)fmt;
-    klog(LOG_PANIC, "PANIC — system halted");
+    klog(LOG_PANIC, "PANIC - system halted");
 }
 
 /* ── Heap lives at a fixed physical address, NOT in BSS ─────────────────────
@@ -222,7 +233,7 @@ void kernel_main(uint32_t mb2_magic, mb2_info_t *mb2_info) {
     } else {
         /* Fallback: assume 63 MB of conventional RAM above 1 MB */
         pmm_init_region(0x100000, 63ULL * 1024 * 1024);
-        klog(LOG_WARN, "No valid Multiboot2 info — using fallback memory map");
+        klog(LOG_WARN, "No valid Multiboot2 info - using fallback memory map");
     }
 
     /*
@@ -247,7 +258,7 @@ void kernel_main(uint32_t mb2_magic, mb2_info_t *mb2_info) {
     /* Reserve the fixed heap window so PMM never hands it to a driver */
     pmm_deinit_region(HEAP_START, HEAP_SIZE);
 
-    klog(LOG_INFO, "PMM: kernel 0x%x–0x%x (%llu KB), heap 0x%x–0x%x (%u MB)",
+    klog(LOG_INFO, "PMM: kernel 0x%x-0x%x (%llu KB), heap 0x%x-0x%x (%u MB)",
          kstart, kend, (kend - kstart) / 1024,
          (uint64_t)HEAP_START, (uint64_t)(HEAP_START + HEAP_SIZE),
          (unsigned)(HEAP_SIZE >> 20));
@@ -316,6 +327,6 @@ void kernel_main(uint32_t mb2_magic, mb2_info_t *mb2_info) {
     proc_enter_ring3(init);
 
     /* Never reached */
-    klog(LOG_WARN, "Kernel idle — should never reach here");
+    klog(LOG_WARN, "Kernel idle - should never reach here");
     for (;;) __asm__ volatile ("sti; hlt");
 }

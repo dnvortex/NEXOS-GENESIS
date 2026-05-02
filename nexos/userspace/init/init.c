@@ -89,7 +89,7 @@ static int try_mount_disk(void) {
         return 0;
     }
 
-    klog(LOG_WARN, "init: no FAT32 disk found — running from ramfs only");
+    klog(LOG_WARN, "init: no FAT32 disk found - running from ramfs only");
     return -1;
 }
 
