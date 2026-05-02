@@ -54,7 +54,7 @@ void vmm_unmap_page(uint64_t *pml4_table, uint64_t virt) {
     uint64_t *pt = (uint64_t *)(pd[pd_idx] & ~0xFFFULL);
 
     pt[pt_idx] = 0;
-    __asm__ volatile ("invlpg [%0]" :: "r"(virt) : "memory");
+    __asm__ volatile ("invlpg (%0)" :: "r"(virt) : "memory");
 }
 
 uint64_t vmm_get_physical(uint64_t *pml4_table, uint64_t virt) {
@@ -91,7 +91,7 @@ void paging_init(void) {
         vmm_map_page(kernel_pml4, addr, addr, PAGE_WRITE | PAGE_USER);
     }
 
-    __asm__ volatile ("mov cr3, %0" :: "r"((uint64_t)kernel_pml4) : "memory");
+    __asm__ volatile ("mov %0, %%cr3" :: "r"((uint64_t)kernel_pml4) : "memory");
 
     klog(LOG_INFO, "VMM: 4-level paging enabled, first 4 MB identity-mapped (r/w, user)");
 }

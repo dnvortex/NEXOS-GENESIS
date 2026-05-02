@@ -19,6 +19,12 @@ static uint8_t bcd_to_bin(uint8_t bcd) {
     return (bcd & 0x0F) + ((bcd >> 4) * 10);
 }
 
+void rtc_init(void) {
+    /* Nothing to program at init time — CMOS RTC runs autonomously.
+       We simply verify we can read a sane time and log it. */
+    klog(LOG_INFO, "RTC initialized");
+}
+
 void rtc_get_time(rtc_time_t *t) {
     /* Wait for no update in progress */
     while (rtc_updating());

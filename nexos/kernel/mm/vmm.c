@@ -44,5 +44,5 @@ uint64_t vmm_create_address_space(void) {
 
 /* Switch to a different address space by writing pml4_phys to CR3 */
 void vmm_switch_address_space(uint64_t pml4_phys) {
-    __asm__ volatile ("mov cr3, %0" :: "r"(pml4_phys) : "memory");
+    __asm__ volatile ("mov %0, %%cr3" :: "r"(pml4_phys) : "memory");
 }
