@@ -1,0 +1,520 @@
+Build me a complete custom operating system from scratch called "NexOS". This is a full operating system project that must be bootable on a virtual machine (VirtualBox or QEMU) and later installable on a real PC or laptop via USB. Below are all the requirements, architecture decisions, features, and implementation details. Follow each section carefully and build iteratively, testing each component before moving to the next.
+
+════════════════════════════════════════
+PROJECT OVERVIEW
+════════════════════════════════════════
+
+Project Name: NexOS
+Target Architecture: x86_64 (64-bit)
+Primary Language: C (kernel, drivers, shell), x86 Assembly (bootloader stubs, low-level routines), Python (build tooling and installer scripts)
+Bootloader: GRUB 2 (GNU GRUB)
+Build System: GNU Make
+Output: ISO image bootable in QEMU/VirtualBox and writable to USB for bare-metal installs
+License: MIT
+
+════════════════════════════════════════
+1. PROJECT STRUCTURE
+════════════════════════════════════════
+
+Create the following directory layout:
+
+nexos/
+├── boot/
+│   ├── grub/
+│   │   └── grub.cfg          # GRUB 2 configuration
+│   └── linker.ld             # Linker script for kernel
+├── kernel/
+│   ├── arch/
+│   │   └── x86_64/
+│   │       ├── boot.asm      # Multiboot2 entry point (NASM)
+│   │       ├── gdt.c / gdt.h # Global Descriptor Table
+│   │       ├── idt.c / idt.h # Interrupt Descriptor Table
+│   │       ├── isr.asm       # Interrupt Service Routines
+│   │       └── paging.c      # Paging / virtual memory
+│   ├── drivers/
+│   │   ├── vga.c / vga.h     # VGA text mode driver
+│   │   ├── keyboard.c        # PS/2 keyboard driver
+│   │   ├── timer.c           # PIT timer driver
+│   │   ├── serial.c          # Serial port (COM1) debug output
+│   │   ├── ata.c             # ATA/IDE disk driver
+│   │   └── pci.c             # Basic PCI bus enumeration
+│   ├── fs/
+│   │   ├── vfs.c / vfs.h     # Virtual Filesystem layer
+│   │   ├── fat32.c           # FAT32 read/write support
+│   │   └── ramfs.c           # RAM-based temp filesystem
+│   ├── mm/
+│   │   ├── pmm.c             # Physical memory manager
+│   │   ├── vmm.c             # Virtual memory manager
+│   │   └── heap.c            # Kernel heap (kmalloc/kfree)
+│   ├── proc/
+│   │   ├── process.c         # Process control blocks
+│   │   ├── scheduler.c       # Round-robin scheduler
+│   │   └── syscall.c         # System call handler
+│   ├── net/
+│   │   └── (stub files for future networking)
+│   ├── kernel.c              # Kernel main entry point
+│   └── kernel.h              # Shared kernel definitions
+├── userspace/
+│   ├── shell/
+│   │   └── nsh.c             # NexOS Shell (nsh)
+│   ├── init/
+│   │   └── init.c            # PID 1 init process
+│   └── libc/
+│       ├── string.c
+│       ├── stdio.c
+│       └── stdlib.c          # Minimal C standard library
+├── tools/
+│   ├── build_iso.sh          # Script to assemble bootable ISO
+│   ├── run_qemu.sh           # Launch in QEMU for testing
+│   └── install_usb.py        # Python USB installer script
+├── Makefile                  # Top-level build system
+└── README.md
+
+════════════════════════════════════════
+2. BOOTLOADER — GRUB 2
+════════════════════════════════════════
+
+Use GRUB 2 as the bootloader. The kernel must comply with the Multiboot2 specification so GRUB can detect and load it.
+
+- Write boot/grub/grub.cfg with:
+  * A boot menu entry titled "NexOS" 
+  * A second entry "NexOS (Safe Mode)" passing kernel param safemode=1
+  * A third entry "Reboot" using GRUB's reboot command
+  * A timeout of 5 seconds with a visible countdown
+  * Set GRUB resolution to 800x600 using gfxmode
+  * Background color set to black, menu text white, selected entry highlighted in blue
+
+- In kernel/arch/x86_64/boot.asm, embed a valid Multiboot2 header:
+  * magic number 0xE85250D6
+  * architecture field 0 (i386 protected mode)
+  * header length and checksum
+  * Include an address tag and framebuffer tag requesting 80x25 text mode
+
+- The linker script (boot/linker.ld) must:
+  * Place the Multiboot2 header at the very start of the binary
+  * Set the load address to 1MB (0x100000)
+  * Define sections: .text, .rodata, .data, .bss
+
+- grub-mkrescue must be used in build_iso.sh to create the final nexos.iso
+
+════════════════════════════════════════
+3. KERNEL ARCHITECTURE
+════════════════════════════════════════
+
+3A. BOOT SEQUENCE
+- boot.asm sets up a small initial stack, clears direction flag, then calls kernel_main() in kernel.c
+- kernel_main() must initialize subsystems in this order:
+  1. Serial debug output (COM1, 115200 baud)
+  2. VGA text mode (clear screen, print boot banner)
+  3. GDT (Global Descriptor Table)
+  4. IDT (Interrupt Descriptor Table) + ISRs
+  5. Physical memory manager (parse Multiboot2 memory map)
+  6. Virtual memory manager + paging
+  7. Kernel heap (kmalloc/kfree)
+  8. PIT timer (1000Hz tick rate)
+  9. Keyboard driver
+  10. ATA driver (detect disks)
+  11. VFS + FAT32
+  12. Process scheduler
+  13. Launch init process (PID 1)
+  14. Drop into idle loop
+
+3B. GDT
+- Set up a flat 64-bit GDT with:
+  * Null descriptor
+  * Kernel code segment (ring 0)
+  * Kernel data segment (ring 0)
+  * User code segment (ring 3)
+  * User data segment (ring 3)
+  * TSS descriptor (Task State Segment for syscalls)
+- Load via lgdt instruction in assembly
+
+3C. IDT AND INTERRUPTS
+- Install handlers for all 32 CPU exception vectors (0–31):
+  * 0: Division by zero
+  * 8: Double fault
+  * 13: General Protection Fault (print register dump, halt)
+  * 14: Page fault (print faulting address, error code)
+  * All others: generic "unhandled exception" with vector number
+- Install IRQ handlers (IRQ0–IRQ15) via the 8259A PIC:
+  * IRQ0: PIT timer tick → scheduler tick
+  * IRQ1: PS/2 keyboard → keyboard buffer
+  * Remap PIC to vectors 32–47 to avoid conflicts with CPU exceptions
+- Implement a clean register dump (all GP registers, CS, SS, RIP, RFLAGS) on fatal exceptions
+
+3D. MEMORY MANAGEMENT
+- Physical Memory Manager (PMM):
+  * Use a bitmap allocator: one bit per 4KB page frame
+  * Parse the Multiboot2 memory map to mark available regions
+  * Functions: pmm_alloc_page(), pmm_free_page(), pmm_get_free_memory()
+  * Reserve the first 1MB for BIOS/legacy use
+
+- Virtual Memory Manager (VMM):
+  * Set up 4-level paging (PML4 → PDPT → PD → PT)
+  * Identity-map the first 4MB for kernel bootstrap
+  * Map the kernel to the higher half at 0xFFFFFFFF80000000
+  * Functions: vmm_map_page(), vmm_unmap_page(), vmm_get_physical()
+
+- Heap:
+  * Implement a simple free-list allocator
+  * Functions: kmalloc(size), kfree(ptr), krealloc(ptr, size)
+  * Place the kernel heap starting at a fixed virtual address (e.g. 0xC0000000)
+
+════════════════════════════════════════
+4. DRIVERS
+════════════════════════════════════════
+
+4A. VGA TEXT MODE DRIVER
+- 80x25 text mode, color support (16 foreground + 8 background colors)
+- Functions: vga_putchar(), vga_puts(), vga_clear(), vga_set_color()
+- Hardware cursor control via CRT ports 0x3D4/0x3D5
+- Support ANSI-like escape sequences for color: \033[31m (red), \033[0m (reset), etc.
+- Scrolling: when the last row is filled, scroll all rows up by one
+
+4B. KEYBOARD DRIVER
+- PS/2 keyboard via IRQ1, I/O port 0x60
+- Scan code set 1 translation to ASCII
+- Support: all printable ASCII, Backspace, Enter, Tab, Arrow keys, Escape
+- Modifier key tracking: Left/Right Shift, Caps Lock, Ctrl, Alt
+- Ring buffer (256 bytes) for keyboard input
+- Functions: keyboard_getchar() (blocking), keyboard_available() (non-blocking check)
+
+4C. PIT TIMER DRIVER
+- Program the 8253/8254 PIT at IRQ0 for 1000Hz (1ms tick resolution)
+- Maintain a global tick counter (uint64_t)
+- Implement: timer_sleep_ms(ms), timer_get_ticks(), timer_get_uptime_seconds()
+
+4D. SERIAL PORT DRIVER
+- COM1 at 0x3F8, 115200 baud, 8N1
+- Use for debug output: serial_printf() mirrors kernel log to serial
+- QEMU can expose this via -serial stdio for host-side logging
+
+4E. ATA/IDE DISK DRIVER
+- PIO mode (polling, no DMA required initially)
+- Support Primary Master and Primary Slave drives
+- Functions: ata_read_sectors(drive, lba, count, buf), ata_write_sectors(...)
+- Detect drive presence via IDENTIFY command
+- Support 28-bit LBA addressing minimum, 48-bit LBA if supported by drive
+
+4F. PCI ENUMERATION
+- Scan PCI bus 0, devices 0–31, functions 0–7
+- Read Vendor ID, Device ID, Class Code, Subclass for each present device
+- Print detected PCI devices to serial debug on boot
+- Store device list for future driver matching
+
+════════════════════════════════════════
+5. FILESYSTEM
+════════════════════════════════════════
+
+5A. VIRTUAL FILESYSTEM (VFS)
+- Implement a VFS abstraction layer with these structures:
+  * vfs_node_t: inode-like structure (name, type, size, read/write/open/close function pointers)
+  * vfs_mount_t: mount point table
+- Supported node types: FILE, DIRECTORY, DEVICE, SYMLINK
+- Functions: vfs_open(), vfs_close(), vfs_read(), vfs_write(), vfs_readdir(), vfs_mkdir(), vfs_stat()
+- Mount point: root "/" always exists, populated by ramfs on boot
+
+5B. FAT32 DRIVER
+- Full FAT32 read support (open, read, readdir, stat)
+- Basic FAT32 write support (create file, write data, update directory entry)
+- Handle long filenames (VFAT LFN extension)
+- Cluster chain traversal and FAT table management
+- Mount FAT32 volumes from ATA disk partitions
+
+5C. RAMFS
+- A simple in-memory filesystem for /tmp and early boot
+- Used as the root filesystem before a disk is mounted
+- Stores files in kernel heap memory
+- Supports: create, read, write, delete, list directory
+
+════════════════════════════════════════
+6. PROCESS MANAGEMENT
+════════════════════════════════════════
+
+6A. PROCESS CONTROL BLOCK (PCB)
+Each process has:
+- PID (process ID, starting at 1 for init)
+- Parent PID
+- State: RUNNING, READY, BLOCKED, ZOMBIE
+- Saved CPU registers (for context switch)
+- Stack pointer + base
+- Page directory (CR3 value for address space)
+- File descriptor table (up to 16 open files)
+- Working directory path
+- Exit code
+
+6B. SCHEDULER
+- Round-robin preemptive scheduling
+- Timer tick (IRQ0) triggers scheduler_tick() which checks time-slice expiry
+- Each process gets a time quantum of 20ms
+- Context switch: save current task registers, load next task registers, switch CR3 if address spaces differ
+- Functions: scheduler_add_process(), scheduler_kill(pid), scheduler_yield(), scheduler_sleep(ms)
+- Implement a simple priority field (0=lowest, 9=highest) for future use
+
+6C. SYSTEM CALLS
+- Syscall mechanism via software interrupt INT 0x80 (for compatibility) and SYSCALL instruction
+- Implement these system calls:
+  * 0: sys_exit(code)
+  * 1: sys_read(fd, buf, len)
+  * 2: sys_write(fd, buf, len)
+  * 3: sys_open(path, flags)
+  * 4: sys_close(fd)
+  * 5: sys_fork() — create child process (copy-on-write optional)
+  * 6: sys_exec(path, argv) — replace process image
+  * 7: sys_getpid()
+  * 8: sys_sleep(ms)
+  * 9: sys_stat(path, stat_buf)
+  * 10: sys_mkdir(path)
+  * 11: sys_readdir(fd, dirent)
+  * 12: sys_getcwd(buf, size)
+  * 13: sys_chdir(path)
+  * 14: sys_sbrk(increment) — grow heap
+
+════════════════════════════════════════
+7. USERSPACE
+════════════════════════════════════════
+
+7A. INIT PROCESS
+- PID 1, first process launched by the kernel
+- Reads /etc/nexos.conf (a simple key=value config file from ramfs/FAT32)
+- Mounts the root FAT32 filesystem from disk
+- Populates /dev with device nodes (stdin, stdout, stderr, null, zero)
+- Launches the shell (nsh) on /dev/tty0
+- Reaps zombie processes (wait loop)
+- If shell exits, print "System halted. Please power off." and CPU halt
+
+7B. NEXOS SHELL (nsh)
+Build a fully functional interactive shell with these features:
+
+BUILT-IN COMMANDS:
+- ls [path]          — list directory contents with file sizes and types
+- cd [path]          — change directory (supports . and ..)
+- pwd                — print working directory
+- cat [file]         — display file contents
+- echo [text]        — print text to screen (supports $VARIABLE expansion)
+- mkdir [dir]        — create directory
+- rm [file]          — delete file
+- cp [src] [dst]     — copy file
+- mv [src] [dst]     — move/rename file
+- touch [file]       — create empty file or update timestamp
+- clear              — clear the screen
+- help               — list all commands with one-line descriptions
+- exit / logout      — exit the shell
+- env                — show environment variables
+- export KEY=VALUE   — set environment variable
+- uname              — print OS name and version
+- uptime             — show system uptime
+- ps                 — list running processes (PID, state, name)
+- kill [pid]         — terminate a process by PID
+- reboot             — reboot the system
+- halt               — halt the system
+- mount              — show mounted filesystems
+- free               — show memory usage (total, used, free in KB/MB)
+- date               — show current date and time (RTC)
+
+SHELL FEATURES:
+- Command history (up/down arrow keys, 50 command history buffer)
+- Tab completion for commands and file paths
+- Input line editing (backspace, home/end, left/right arrows, delete key)
+- Pipe support: cmd1 | cmd2 (basic single pipe)
+- Output redirection: cmd > file and cmd >> file
+- Background jobs: cmd & (launches as separate process, shell continues)
+- Environment variable expansion ($HOME, $PATH, $USER, $?)
+- $? holds the exit code of the last command
+- Support for quoted strings: "hello world" treated as one argument
+- A customizable prompt: [user@nexos path]$ 
+- Startup script: reads and executes /etc/nsh.rc on launch
+
+7C. MINIMAL LIBC
+Implement in userspace/libc/ for use by shell and init:
+- string.h: strlen, strcpy, strncpy, strcmp, strncmp, strcat, strncat, strchr, strrchr, strstr, memset, memcpy, memmove
+- stdio.h: printf (with %d, %s, %c, %x, %u, %p format specifiers), putchar, puts, getchar, gets, sprintf, snprintf
+- stdlib.h: atoi, itoa, atol, malloc, free, realloc, exit, abs, rand, srand
+- All implemented using the kernel syscalls above — no host OS dependency
+
+════════════════════════════════════════
+8. SYSTEM CONFIGURATION & FILESYSTEM LAYOUT
+════════════════════════════════════════
+
+On the virtual disk (FAT32 partition), create this directory structure:
+
+/
+├── boot/
+│   └── grub/
+│       └── grub.cfg
+├── bin/            — user-space binaries (nsh, init, etc.)
+├── dev/            — device files (populated by init at runtime)
+├── etc/
+│   ├── nexos.conf  — system config (hostname=nexos, version=0.1)
+│   ├── nsh.rc      — shell startup script (sets PATH, PS1, welcome message)
+│   └── passwd      — simple user list (root:0, user:1000)
+├── home/
+│   └── user/       — default user home directory
+├── lib/            — shared libraries (future use)
+├── tmp/            — temporary files (ramfs mounted here)
+├── var/
+│   └── log/
+│       └── kernel.log  — kernel log file (serial output redirected here eventually)
+└── proc/           — virtual filesystem showing process info (future use)
+
+════════════════════════════════════════
+9. VIRTUAL MACHINE SUPPORT
+════════════════════════════════════════
+
+9A. QEMU
+Create tools/run_qemu.sh that launches NexOS with:
+- Machine: q35 or pc (x86_64)
+- RAM: 256MB minimum
+- Boot from nexos.iso via -cdrom
+- Also support booting from disk image via -hda nexos.img
+- Serial output to host terminal via -serial stdio
+- Enable KVM if available (-enable-kvm) for speed
+- Networking: user-mode networking (-netdev user) — stub only for now
+- Display: SDL or VNC (configurable via variable in script)
+- Provide a second script run_qemu_debug.sh that adds -s -S for GDB remote debugging
+
+9B. VIRTUALBOX
+- The GRUB ISO must boot correctly in VirtualBox
+- Document in README.md:
+  * Create new VM: Type=Other, Version=Other/Unknown (64-bit)
+  * RAM: 256MB+
+  * No hard disk needed for ISO boot
+  * Attach nexos.iso as optical drive
+  * Enable I/O APIC, disable EFI (use legacy BIOS mode)
+  * Network: NAT mode
+
+════════════════════════════════════════
+10. REAL HARDWARE INSTALLATION
+════════════════════════════════════════
+
+10A. USB INSTALLER SCRIPT
+Create tools/install_usb.py:
+- Written in Python 3, uses subprocess and os modules only (no third-party deps)
+- Detects available USB drives on Linux (/dev/sdX) and macOS (/dev/diskN)
+- Shows a list of detected removable drives with size and label
+- Prompts user to select target drive with a WARNING that it will be wiped
+- Requires explicit confirmation: user must type "YES" (uppercase) to proceed
+- Uses dd on Linux/macOS to write nexos.iso to the USB drive
+- Shows progress via dd status=progress
+- Calls sync after writing
+- Prints "USB drive ready. Boot from it in your BIOS." on success
+
+10B. BIOS BOOT REQUIREMENTS
+- The ISO must use El Torito boot record (grub-mkrescue handles this)
+- GRUB must be configured to detect and use the disk's partition 1 as root
+- The system must support booting on machines with legacy BIOS (not UEFI for now)
+- In grub.cfg add a fallback: if booting from USB fails, show error and allow manual grub command entry
+
+════════════════════════════════════════
+11. BUILD SYSTEM
+════════════════════════════════════════
+
+The top-level Makefile must have these targets:
+- make all          — build everything (kernel + userspace + ISO)
+- make kernel       — build only the kernel ELF
+- make iso          — build the bootable ISO
+- make clean        — remove all build artifacts
+- make run          — build ISO and launch in QEMU
+- make run-debug    — build ISO and launch QEMU with GDB server
+- make install-usb  — build ISO and launch the Python USB installer
+
+Compiler flags for kernel:
+  -std=c11 -ffreestanding -fno-stack-protector -fno-pic -mno-red-zone
+  -mno-mmx -mno-sse -mno-sse2 -Wall -Wextra -O2
+  -m64 -mcmodel=kernel -nostdlib -nostdinc
+
+Assembler: NASM with -f elf64
+
+Linker: ld with the custom linker script, -nostdlib -z noexecstack
+
+Cross-compiler: Use x86_64-elf-gcc if available, fall back to system gcc with appropriate flags. The Makefile should auto-detect this.
+
+════════════════════════════════════════
+12. DEBUGGING AND LOGGING
+════════════════════════════════════════
+
+- Implement a kernel logging system with levels: DEBUG, INFO, WARN, ERROR, PANIC
+- klog(level, format, ...) writes to both VGA (if in text mode) and COM1 serial
+- Color-code log levels on VGA: DEBUG=gray, INFO=white, WARN=yellow, ERROR=red, PANIC=red+blink
+- On PANIC: print register dump, stack trace (if symbols available), then execute CLI; HLT in an infinite loop
+- All kernel subsystem init functions must log success or failure
+- Serial log format: [TICK][LEVEL] message\n  (e.g. [00012345][INFO] Keyboard driver initialized)
+
+════════════════════════════════════════
+13. REAL-TIME CLOCK
+════════════════════════════════════════
+
+- Read date and time from the CMOS RTC via I/O ports 0x70 and 0x71
+- Parse BCD-encoded registers: seconds, minutes, hours, day, month, year
+- Provide rtc_get_time(rtc_time_t *t) and rtc_time_to_string(char *buf)
+- The shell "date" command uses this to display current date/time
+- Handle century register if available
+
+════════════════════════════════════════
+14. IMPLEMENTATION ORDER (build in this sequence)
+════════════════════════════════════════
+
+Phase 1 — Bare Metal Boot
+  [1] Set up project structure, Makefile, build toolchain
+  [2] Write Multiboot2 boot.asm and empty kernel_main()
+  [3] Configure GRUB and grub-mkrescue, verify ISO boots in QEMU
+  [4] Implement VGA text driver + klog via serial
+  [5] Set up GDT and IDT, install exception handlers, verify with divide-by-zero test
+
+Phase 2 — Memory & Interrupts
+  [6] Implement PMM (physical memory manager)
+  [7] Implement VMM + 4-level paging
+  [8] Implement kernel heap (kmalloc/kfree)
+  [9] Install PIT timer, implement timer_sleep_ms
+  [10] Install keyboard driver, implement keyboard_getchar
+
+Phase 3 — Storage & Filesystem
+  [11] Implement ATA PIO driver, verify disk detection in QEMU with a disk image
+  [12] Implement VFS layer
+  [13] Implement ramfs (RAM filesystem)
+  [14] Implement FAT32 read support, mount and list files from a FAT32 disk image
+
+Phase 4 — Processes & Syscalls
+  [15] Implement PCB and basic process creation (kernel threads first)
+  [16] Implement round-robin scheduler with PIT-driven preemption
+  [17] Implement system call interface (INT 0x80)
+  [18] Add user-mode support (ring 3 execution via IRET)
+
+Phase 5 — Userspace
+  [19] Build minimal libc (string, stdio, stdlib)
+  [20] Build and launch init process (PID 1)
+  [21] Build nsh shell with built-in commands
+  [22] Implement shell advanced features (history, tab completion, pipes, redirection)
+
+Phase 6 — Polish & Packaging
+  [23] Set up /etc config files and default filesystem layout
+  [24] Implement USB installer script
+  [25] Write full README.md with build instructions, QEMU usage, VirtualBox setup, and USB install guide
+  [26] Final testing: boot in QEMU, boot in VirtualBox, verify all shell commands
+
+════════════════════════════════════════
+15. README.md REQUIREMENTS
+════════════════════════════════════════
+
+The README.md must include:
+- Project description and feature list
+- Prerequisites: nasm, gcc, ld, grub-mkrescue, xorriso, qemu-system-x86_64, python3, make
+- Build instructions (make all)
+- How to run in QEMU (make run)
+- How to run in VirtualBox (step-by-step)
+- How to write to USB (make install-usb)
+- Architecture overview with a diagram (ASCII art acceptable)
+- Syscall table
+- Known limitations and future roadmap
+- License section (MIT)
+
+════════════════════════════════════════
+START BUILDING
+════════════════════════════════════════
+
+Begin with Phase 1 immediately. For each file you create, add a file header comment block:
+  /* NexOS — [filename] | [brief description] | MIT License */
+
+After completing each Phase, print a summary of what was built and what to test before proceeding to the next phase. If any step fails to compile or boot, debug it before continuing. Do not skip phases or leave stub functions unimplemented unless explicitly labeled "future use" in the spec above.
+
+Start now with Phase 1, Step 1: create the full project directory structure and the initial Makefile.
