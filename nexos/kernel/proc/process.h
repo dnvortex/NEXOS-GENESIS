@@ -7,7 +7,7 @@
 
 #define MAX_PROCESSES   64
 #define MAX_FDS         16
-#define PROC_STACK_SIZE (8 * 1024)   /* 8KB per process kernel stack */
+#define PROC_STACK_SIZE (8 * 1024)   /* 8 KB kernel stack per process */
 #define MAX_ENV_VARS    64
 #define MAX_ENV_LEN     256
 
@@ -34,8 +34,15 @@ typedef struct process {
     uint32_t      ppid;
     proc_state_t  state;
     cpu_context_t context;
+
+    /* Kernel stack — used as rsp0 in TSS during syscall handling */
     uint8_t      *stack;
     uint64_t      stack_size;
+
+    /* User-mode stack (one physical page, identity-mapped for now) */
+    uint64_t      user_stack;      /* physical / virtual base */
+    uint64_t      user_stack_top;  /* top (= base + PAGE_SIZE)  */
+
     uint64_t      cr3;
     vfs_node_t   *fds[MAX_FDS];
     char          cwd[1024];
@@ -46,14 +53,15 @@ typedef struct process {
     char          name[64];
 } process_t;
 
-void      proc_init(void);
+void       proc_init(void);
 process_t *proc_create(const char *name, void (*entry)(void), uint8_t priority);
-void      proc_exit(int code);
+void       proc_enter_ring3(process_t *proc);   /* IRET into ring 3 */
+void       proc_exit(int code);
 process_t *proc_get_current(void);
 process_t *proc_get_by_pid(uint32_t pid);
-void      proc_kill(uint32_t pid);
-int       proc_open_fd(process_t *proc, vfs_node_t *node);
-void      proc_close_fd(process_t *proc, int fd);
+void       proc_kill(uint32_t pid);
+int        proc_open_fd(process_t *proc, vfs_node_t *node);
+void       proc_close_fd(process_t *proc, int fd);
 
 extern process_t *processes[MAX_PROCESSES];
 extern int        process_count;

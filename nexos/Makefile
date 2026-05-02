@@ -12,19 +12,16 @@ endif
 ASM    = nasm
 PYTHON = python3
 
-# Directories
-ROOT    = .
-BUILD   = build
-KERNEL  = kernel
-BOOT    = boot
-USER    = userspace
-TOOLS   = tools
+ROOT   = .
+BUILD  = build
+KERNEL = kernel
+BOOT   = boot
+USER   = userspace
+TOOLS  = tools
 
-# Output
-KERNEL_ELF  = $(BUILD)/nexos.kernel
-ISO_FILE    = $(BUILD)/nexos.iso
+KERNEL_ELF = $(BUILD)/nexos.kernel
+ISO_FILE   = $(BUILD)/nexos.iso
 
-# Compiler flags for kernel
 CFLAGS = -std=c11 -ffreestanding -fno-stack-protector -fno-pic \
          -mno-red-zone -mno-mmx -mno-sse -mno-sse2 \
          -Wall -Wextra -O2 -m64 -mcmodel=kernel \
@@ -36,7 +33,7 @@ ASFLAGS = -f elf64
 
 LDFLAGS = -T $(BOOT)/linker.ld -nostdlib -z noexecstack
 
-# Source files
+# ---- C sources ----
 KERNEL_C_SOURCES = \
     $(KERNEL)/kernel.c \
     $(KERNEL)/arch/x86_64/gdt.c \
@@ -51,73 +48,74 @@ KERNEL_C_SOURCES = \
     $(KERNEL)/drivers/rtc.c \
     $(KERNEL)/mm/pmm.c \
     $(KERNEL)/mm/heap.c \
+    $(KERNEL)/mm/vmm.c \
     $(KERNEL)/fs/vfs.c \
     $(KERNEL)/fs/ramfs.c \
     $(KERNEL)/fs/fat32.c \
+    $(KERNEL)/fs/procfs.c \
     $(KERNEL)/proc/process.c \
     $(KERNEL)/proc/scheduler.c \
     $(KERNEL)/proc/syscall.c \
-    $(KERNEL)/net/stub.c \
+    $(KERNEL)/net/net.c \
     $(USER)/init/init.c \
     $(USER)/shell/nsh.c
 
+# ---- Assembly sources ----
 KERNEL_ASM_SOURCES = \
     $(KERNEL)/arch/x86_64/boot.asm \
     $(KERNEL)/arch/x86_64/gdt_flush.asm \
-    $(KERNEL)/arch/x86_64/isr.asm
+    $(KERNEL)/arch/x86_64/isr.asm \
+    $(KERNEL)/arch/x86_64/enter_ring3.asm
 
-# Object files
-KERNEL_C_OBJS   = $(patsubst %.c,   $(BUILD)/%.o, $(KERNEL_C_SOURCES))
+KERNEL_C_OBJS   = $(patsubst %.c,   $(BUILD)/%.o,     $(KERNEL_C_SOURCES))
 KERNEL_ASM_OBJS = $(patsubst %.asm, $(BUILD)/%.asm.o, $(KERNEL_ASM_SOURCES))
-ALL_OBJS = $(KERNEL_ASM_OBJS) $(KERNEL_C_OBJS)
+ALL_OBJS        = $(KERNEL_ASM_OBJS) $(KERNEL_C_OBJS)
 
 # ---- Targets ----
-
-.PHONY: all kernel iso clean run run-debug install-usb
+.PHONY: all kernel iso clean run run-debug install-usb check
 
 all: kernel iso
 
 kernel: $(KERNEL_ELF)
 
 iso: kernel
-        @chmod +x $(TOOLS)/build_iso.sh
-        @$(TOOLS)/build_iso.sh
+	@chmod +x $(TOOLS)/build_iso.sh
+	@$(TOOLS)/build_iso.sh
 
 run: iso
-        @chmod +x $(TOOLS)/run_qemu.sh
-        @$(TOOLS)/run_qemu.sh
+	@chmod +x $(TOOLS)/run_qemu.sh
+	@$(TOOLS)/run_qemu.sh
 
 run-debug: iso
-        @chmod +x $(TOOLS)/run_qemu_debug.sh
-        @$(TOOLS)/run_qemu_debug.sh
+	@chmod +x $(TOOLS)/run_qemu_debug.sh
+	@$(TOOLS)/run_qemu_debug.sh
 
 install-usb: iso
-        @$(PYTHON) $(TOOLS)/install_usb.py
+	@$(PYTHON) $(TOOLS)/install_usb.py
+
+check:
+	$(CC) $(CFLAGS) -fsyntax-only $(KERNEL_C_SOURCES)
+	@echo "Syntax check passed."
 
 clean:
-        rm -rf $(BUILD)
+	rm -rf $(BUILD)
 
-# ---- Kernel ELF ----
-
+# ---- Link ----
 $(KERNEL_ELF): $(ALL_OBJS) $(BOOT)/linker.ld
-        @mkdir -p $(dir $@)
-        @echo "[LD] $@"
-        $(LD) $(LDFLAGS) -o $@ $(ALL_OBJS)
+	@mkdir -p $(dir $@)
+	@echo "[LD] $@"
+	$(LD) $(LDFLAGS) -o $@ $(ALL_OBJS)
 
 # ---- Compile C ----
-
 $(BUILD)/%.o: %.c
-        @mkdir -p $(dir $@)
-        @echo "[CC] $<"
-        $(CC) $(CFLAGS) -c $< -o $@
+	@mkdir -p $(dir $@)
+	@echo "[CC] $<"
+	$(CC) $(CFLAGS) -c $< -o $@
 
 # ---- Assemble ----
-
 $(BUILD)/%.asm.o: %.asm
-        @mkdir -p $(dir $@)
-        @echo "[ASM] $<"
-        $(ASM) $(ASFLAGS) $< -o $@
-
-# ---- Dependencies ----
+	@mkdir -p $(dir $@)
+	@echo "[ASM] $<"
+	$(ASM) $(ASFLAGS) $< -o $@
 
 -include $(ALL_OBJS:.o=.d)

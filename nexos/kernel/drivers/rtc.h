@@ -10,6 +10,7 @@ typedef struct {
     uint16_t year;
 } rtc_time_t;
 
+void rtc_init(void);
 void rtc_get_time(rtc_time_t *t);
 void rtc_time_to_string(char *buf, const rtc_time_t *t);
 

@@ -65,6 +65,8 @@ static inline void hlt(void) { __asm__ volatile ("hlt"); }
 #define UNUSED(x) ((void)(x))
 #define ALIGN_UP(val, align)   (((val) + (align) - 1) & ~((align) - 1))
 #define ALIGN_DOWN(val, align) ((val) & ~((align) - 1))
-#define PAGE_SIZE 4096
+#ifndef PAGE_SIZE
+#define PAGE_SIZE 4096UL
+#endif
 
 #endif

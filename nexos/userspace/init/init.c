@@ -10,10 +10,8 @@
 #include "../../kernel/proc/scheduler.h"
 #include "../../kernel/mm/heap.h"
 
-/* Forward declaration of shell entry */
-void nsh_main(void);
+extern void nsh_main(void);
 
-/* Write a file into VFS with string content */
 static void vfs_write_file(const char *path, const char *content) {
     vfs_create(path, 0);
     vfs_node_t *node = vfs_open(path, 0);
@@ -25,23 +23,12 @@ static void vfs_write_file(const char *path, const char *content) {
     }
 }
 
-/* Populate /etc config files */
 static void setup_etc(void) {
+    /* TASK 8 — required config files */
     vfs_write_file("/etc/nexos.conf",
         "hostname=nexos\n"
         "version=0.1\n"
-        "rootfs=ramfs\n"
         "default_shell=/bin/nsh\n"
-    );
-
-    vfs_write_file("/etc/nsh.rc",
-        "# NexOS shell startup script\n"
-        "export PATH=/bin:/usr/bin\n"
-        "export HOME=/home/user\n"
-        "export USER=root\n"
-        "export PS1=[root@nexos ~]$ \n"
-        "echo Welcome to NexOS v0.1.0\n"
-        "echo Type 'help' for a list of commands.\n"
     );
 
     vfs_write_file("/etc/passwd",
@@ -49,17 +36,27 @@ static void setup_etc(void) {
         "user:x:1000:1000:user:/home/user:/bin/nsh\n"
     );
 
+    vfs_write_file("/etc/motd",
+        "Welcome to NexOS 0.1\n"
+        "Type 'help' for a list of commands.\n"
+    );
+
+    vfs_write_file("/etc/nsh.rc",
+        "# NexOS shell startup script\n"
+        "export PATH=/bin:/usr/bin\n"
+        "export HOME=/home/user\n"
+        "export USER=root\n"
+        "export PS1=[root@nexos]$ \n"
+        "cat /etc/motd\n"
+    );
+
     vfs_mkdir("/home/user");
     vfs_mkdir("/var/log");
 
-    vfs_write_file("/var/log/kernel.log",
-        "# NexOS kernel log\n"
-    );
+    vfs_write_file("/var/log/kernel.log", "# NexOS kernel log\n");
 }
 
-/* Setup /dev device nodes */
 static void setup_dev(void) {
-    /* Create device node files — they are character devices backed by VFS */
     vfs_create("/dev/null",   VFS_NODE_CHARDEV);
     vfs_create("/dev/zero",   VFS_NODE_CHARDEV);
     vfs_create("/dev/tty0",   VFS_NODE_CHARDEV);
@@ -69,9 +66,7 @@ static void setup_dev(void) {
     klog(LOG_INFO, "init: /dev populated");
 }
 
-/* Try to detect and mount FAT32 from disk */
 static void try_mount_disk(void) {
-    /* Try to mount from ATA primary master, LBA 0 */
     vfs_node_t *fat_root = fat32_mount(ATA_PRIMARY_MASTER, 0);
     if (fat_root) {
         vfs_mount("/mnt", fat_root);
@@ -81,7 +76,6 @@ static void try_mount_disk(void) {
     }
 }
 
-/* Reap zombie child processes */
 static void reap_zombies(void) {
     for (int i = 0; i < MAX_PROCESSES; i++) {
         if (processes[i] && processes[i]->state == PROC_ZOMBIE &&
@@ -98,32 +92,23 @@ static void reap_zombies(void) {
 void init_main(void) {
     klog(LOG_INFO, "init: PID 1 starting");
 
-    /* Set up /etc configuration */
     setup_etc();
-
-    /* Set up /dev nodes */
     setup_dev();
-
-    /* Try to mount FAT32 disk */
     try_mount_disk();
 
-    /* Create /mnt if it wasn't created by ramfs */
     vfs_mkdir("/mnt");
-    vfs_mkdir("/proc");
     vfs_mkdir("/tmp");
+    /* /proc is already mounted by procfs_init() in kernel_main */
 
     klog(LOG_INFO, "init: launching shell (nsh)");
     vga_set_color(VGA_COLOR_WHITE, VGA_COLOR_BLACK);
 
-    /* Launch the shell */
     nsh_main();
 
-    /* Shell exited */
     vga_set_color(VGA_COLOR_LIGHT_RED, VGA_COLOR_BLACK);
     vga_puts("\n\nSystem halted. Please power off.\n");
     serial_puts("init: shell exited, system halted.\n");
 
-    /* Reap zombies in case anything is left */
     while (1) {
         reap_zombies();
         __asm__ volatile ("hlt");

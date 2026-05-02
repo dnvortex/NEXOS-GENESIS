@@ -1,77 +1,84 @@
-# NexOS — A Custom x86_64 Operating System
+# NexOS
 
-NexOS is a complete custom operating system built from scratch for x86_64 architecture. It is bootable in QEMU and VirtualBox, and can be installed to a USB drive for bare-metal use.
+A custom x86_64 operating system written from scratch in C and Assembly (NASM).
 
----
+## Features
 
-## Architecture Overview
+### Kernel
+- **Multiboot2** compliant bootloader entry (GRUB2)
+- **GDT** with null, kernel code/data, user code/data (ring 3), and TSS segments
+- **IDT** with all 256 vectors — CPU exceptions (0–31), PIC-remapped IRQs (32–47), INT 0x80 syscall gate
+- **4-level paging** (PML4 → PDPT → PD → PT) — identity-maps first 4 MB
+- **VMM** — `vmm_map`, `vmm_unmap`, `vmm_phys`, `vmm_create_address_space`, `vmm_switch_address_space`
+- **PMM** — bitmap physical frame allocator, reads Multiboot2 memory map
+- **Heap** — free-list `kmalloc` / `kfree` with splitting and coalescing
+- **Ring 3 user mode** — per-process user stack, TSS rsp0 updated per switch, IRET via `enter_ring3`
 
-```
-┌─────────────────────────────────────────────────────────┐
-│                    GRUB 2 Bootloader                    │
-│              (Multiboot2, El Torito ISO)                 │
-└─────────────────────────┬───────────────────────────────┘
-                           │
-┌─────────────────────────▼───────────────────────────────┐
-│                      NexOS Kernel                        │
-│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌────────┐ │
-│  │   GDT    │  │   IDT    │  │   PMM    │  │  VMM   │ │
-│  │ 5 segs   │  │ 256 ints │  │  Bitmap  │  │ 4-lvl  │ │
-│  └──────────┘  └──────────┘  └──────────┘  └────────┘ │
-│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌────────┐ │
-│  │   Heap   │  │   PIT    │  │Keyboard  │  │  ATA   │ │
-│  │ FreeList │  │ 1000Hz   │  │ PS/2 IRQ │  │  PIO   │ │
-│  └──────────┘  └──────────┘  └──────────┘  └────────┘ │
-│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌────────┐ │
-│  │   VFS    │  │  ramfs   │  │  FAT32   │  │  PCI   │ │
-│  │ Abstract │  │ In-mem   │  │ R/W+LFN  │  │  Enum  │ │
-│  └──────────┘  └──────────┘  └──────────┘  └────────┘ │
-│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌────────┐ │
-│  │  Sched   │  │ Process  │  │ Syscalls │  │  RTC   │ │
-│  │Round-rob │  │   PCB    │  │ INT 0x80 │  │  CMOS  │ │
-│  └──────────┘  └──────────┘  └──────────┘  └────────┘ │
-└─────────────────────────┬───────────────────────────────┘
-                           │
-┌─────────────────────────▼───────────────────────────────┐
-│                      Userspace                           │
-│  ┌──────────────────────────────────────────────────┐   │
-│  │              init (PID 1)                         │   │
-│  │  mounts FAT32 · populates /dev · reads /etc      │   │
-│  └────────────────────────┬─────────────────────────┘   │
-│                            │                             │
-│  ┌─────────────────────────▼────────────────────────┐   │
-│  │         nsh — NexOS Shell                         │   │
-│  │  25 built-ins · history · tab-complete · vars    │   │
-│  └──────────────────────────────────────────────────┘   │
-│  ┌──────────────────────────────────────────────────┐   │
-│  │         Minimal libc (string/stdio/stdlib)        │   │
-│  └──────────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────┘
-```
+### Drivers
+| Driver | Details |
+|--------|---------|
+| VGA | 80×25 text mode, 16 colours, scrolling, cursor |
+| Serial | COM1 @ 115200 baud — mirrors all kernel log output |
+| PS/2 Keyboard | Scancode → ASCII, shift/caps/special keys, circular buffer |
+| PIT | 8253/8254 @ 1000 Hz — `timer_sleep_ms`, `timer_get_ticks` |
+| ATA PIO | Primary master/slave, IDENTIFY, 28-bit LBA read/write |
+| PCI | Config-space bus enumeration — vendor/device/class logged |
+| CMOS RTC | BCD → binary conversion, `rtc_get_time`, `rtc_time_to_string` |
+
+### Filesystems
+| FS | Mount | Description |
+|----|-------|-------------|
+| ramfs | `/` | In-memory heap-backed filesystem — files and directories |
+| fat32 | `/mnt` | Full FAT32 + LFN, backed by ATA PIO reads |
+| procfs | `/proc` | Dynamic virtual files: version, uptime, meminfo, per-PID status |
+
+### Processes & Scheduling
+- **PCB** — PID, PPID, name, state, ring-3 user stack, kernel stack (TSS rsp0), fd table, CWD
+- **Round-robin scheduler** — 20 ms quantum, driven by PIT IRQ0
+- **INT 0x80 syscall interface** — 15 system calls (see table below)
+
+### Userspace
+- **init** (PID 1) — populates `/etc`, `/dev`, tries to mount FAT32, launches nsh
+- **nsh** — fully interactive shell with 25 built-ins
+- **Minimal libc** — string.h, stdio.h, stdlib.h all via INT 0x80
+
+### Shell (nsh) — 25 Built-in Commands
+`ls` `cd` `pwd` `cat` `echo` `mkdir` `rm` `touch` `cp` `mv` `clear`
+`help` `env` `export` `uname` `uptime` `ps` `kill` `free` `date`
+`mount` `reboot` `halt` `exit` `logout`
+
+**Shell features:**
+- Pipe: `cmd1 | cmd2`
+- Output redirection: `cmd > file`, `cmd >> file`
+- Background jobs: `cmd &`
+- Quoted arguments: `"hello world"`
+- Escaped quotes: `\"` inside strings
+- Unterminated quote detection: prints `nsh: unmatched quote`
+- Environment variable expansion: `$VAR`, `$?`
+- Command history (50 entries, ↑/↓ arrows)
+- Tab completion (built-ins + VFS paths)
+- Startup script: `/etc/nsh.rc`
 
 ---
 
 ## Prerequisites
 
-Install the following tools:
+| Tool | Purpose |
+|------|---------|
+| `nasm` | Assemble boot.asm, ISR stubs, gdt_flush, enter_ring3 |
+| `gcc` | Compile kernel C (`x86_64-elf-gcc` preferred; system GCC fallback) |
+| `ld` | Link kernel ELF |
+| `grub-mkrescue` | Create bootable ISO |
+| `xorriso` | ISO image backend for grub-mkrescue |
+| `qemu-system-x86_64` | Run the OS in a VM |
+| `python3` | USB installer script |
+| `make` | Build orchestration |
 
+Install on Ubuntu/Debian:
 ```bash
-# Debian/Ubuntu
-sudo apt install nasm gcc binutils grub-pc-bin grub-common \
-     xorriso qemu-system-x86 python3 make
-
-# Fedora/RHEL
-sudo dnf install nasm gcc binutils grub2-tools xorriso \
+sudo apt install nasm gcc binutils grub-pc-bin grub-common xorriso \
      qemu-system-x86 python3 make
-
-# macOS (Homebrew)
-brew install nasm x86_64-elf-gcc x86_64-elf-binutils \
-     xorriso qemu python3
 ```
-
-### Cross-compiler (recommended)
-
-The Makefile auto-detects `x86_64-elf-gcc`. If not found, falls back to system `gcc` with `-m64 -mcmodel=kernel`.
 
 ---
 
@@ -79,18 +86,11 @@ The Makefile auto-detects `x86_64-elf-gcc`. If not found, falls back to system `
 
 ```bash
 cd nexos
-
-# Build everything (kernel + ISO)
-make all
-
-# Build only the kernel ELF
-make kernel
-
-# Build only the ISO (requires kernel built first)
-make iso
-
-# Clean all build artifacts
-make clean
+make all        # build kernel ELF + bootable ISO → build/nexos.iso
+make kernel     # kernel ELF only → build/nexos.kernel
+make iso        # ISO only (requires kernel)
+make check      # syntax-check all C sources without linking
+make clean      # remove build/
 ```
 
 ---
@@ -98,38 +98,24 @@ make clean
 ## Running in QEMU
 
 ```bash
-# Build and boot in QEMU
 make run
-
-# Boot from disk image instead of ISO
-DISPLAY_MODE=sdl ./tools/run_qemu.sh --disk
-
-# Use VNC instead of SDL
-DISPLAY_MODE=vnc make run
 ```
 
-Manual QEMU command:
-```bash
-qemu-system-x86_64 \
-  -machine q35 -m 256M \
-  -cdrom build/nexos.iso \
-  -serial stdio \
-  -display sdl \
-  -boot d
-```
+Launches QEMU with 256 MB RAM, VGA display, ATA disk image, and serial port forwarded to the host terminal.
 
 ---
 
-## GDB Debugging
+## Debugging with GDB
 
 ```bash
-# Terminal 1: launch QEMU with GDB server
-make run-debug
+make run-debug      # QEMU paused, GDB server on :1234
+```
 
-# Terminal 2: connect GDB
-gdb
-(gdb) target remote localhost:1234
-(gdb) symbol-file build/nexos.kernel
+In another terminal:
+```bash
+gdb build/nexos.kernel
+(gdb) target remote :1234
+(gdb) break kernel_main
 (gdb) continue
 ```
 
@@ -137,151 +123,152 @@ gdb
 
 ## Running in VirtualBox
 
-1. Open VirtualBox → **New**
-2. Name: `NexOS`, Type: `Other`, Version: `Other/Unknown (64-bit)`
-3. RAM: **256 MB** or more
-4. Storage: No hard disk needed for ISO-only boot
-5. Settings → **Storage** → Add optical drive → Select `build/nexos.iso`
-6. Settings → **System** → Motherboard:
-   - Enable **I/O APIC**
-   - Disable **EFI** (use legacy BIOS)
-7. Settings → **Network** → NAT mode
-8. Click **Start**
+1. Create new VM: **Type** = Other, **Version** = Other/Unknown (64-bit)
+2. RAM: 256 MB minimum
+3. No hard disk needed for ISO boot
+4. Mount `build/nexos.iso` as the optical drive
+5. **Settings → System**: Enable I/O APIC, **disable EFI** (use legacy BIOS)
+6. **Settings → Display**: VGA controller, 16 MB video memory
+7. **Settings → Network**: NAT mode
+8. Boot the VM
 
 ---
 
-## Writing to USB (bare-metal install)
+## Installing to USB
 
 ```bash
-# Build ISO first
-make all
-
-# Launch installer (interactive, requires sudo for dd)
-make install-usb
-```
-
-Or run directly:
-```bash
-sudo python3 tools/install_usb.py
-```
-
-The installer will:
-1. Detect all removable USB drives
-2. Show drive list with sizes and labels
-3. Ask you to select the target
-4. Require you to type `YES` to confirm (all data will be erased)
-5. Write the ISO using `dd` and call `sync`
-
-Then boot your machine and select the USB drive in your BIOS boot menu. Disable UEFI/Secure Boot and use legacy BIOS mode.
-
----
-
-## Filesystem Layout
-
-```
-/
-├── bin/             User binaries (nsh, init)
-├── boot/grub/       GRUB configuration
-├── dev/             Device nodes (stdin, stdout, stderr, null, zero, tty0)
-├── etc/
-│   ├── nexos.conf   System configuration (key=value)
-│   ├── nsh.rc       Shell startup script
-│   └── passwd       User list
-├── home/user/       Default user home
-├── lib/             Shared libraries (future)
-├── mnt/             FAT32 disk mount point
-├── proc/            Process info (future)
-├── tmp/             Temporary files (ramfs)
-└── var/log/         Log files
+make install-usb        # runs tools/install_usb.py
+# Follow the prompts — type YES to confirm drive wipe
 ```
 
 ---
 
-## Shell Commands (nsh)
+## Architecture Overview
 
-| Command | Description |
-|---------|-------------|
-| `ls [path]` | List directory contents |
-| `cd [path]` | Change directory |
-| `pwd` | Print working directory |
-| `cat <file>` | Display file contents |
-| `echo [text]` | Print text (supports `$VAR`) |
-| `mkdir <dir>` | Create directory |
-| `rm <file>` | Delete file |
-| `cp <src> <dst>` | Copy file |
-| `mv <src> <dst>` | Move/rename file |
-| `touch <file>` | Create empty file |
-| `clear` | Clear screen |
-| `env` | Show environment variables |
-| `export KEY=VALUE` | Set environment variable |
-| `uname` | Print OS name and version |
-| `uptime` | Show system uptime |
-| `ps` | List running processes |
-| `kill <pid>` | Terminate a process |
-| `free` | Show memory usage |
-| `date` | Show current date/time (RTC) |
-| `mount` | Show mounted filesystems |
-| `reboot` | Reboot the system |
-| `halt` | Halt the system |
-| `help` | Show all commands |
-| `exit` / `logout` | Exit the shell |
+```
+┌──────────────────────────────────────────────────────────┐
+│                         GRUB2                            │
+│         (Multiboot2, loads build/nexos.kernel ELF)       │
+└─────────────────────────┬────────────────────────────────┘
+                          │ jmp kernel_main
+                          ▼
+┌──────────────────────────────────────────────────────────┐
+│                    kernel_main()                         │
+│                                                          │
+│  serial → vga → GDT/TSS → IDT/ISRs                      │
+│  → PMM (Multiboot2 mmap) → paging/VMM → heap            │
+│  → PIT timer → PS/2 keyboard → ATA → PCI → RTC          │
+│  → net_init (stub) → VFS/ramfs → procfs                  │
+│  → proc_init → scheduler_init → syscall_init             │
+└─────────────────────────┬────────────────────────────────┘
+                          │ proc_enter_ring3(init)
+                          │ TSS rsp0 = kernel stack top
+                          │ IRET  CS=0x1B  SS=0x23  IF=1
+                          ▼
+┌──────────────────────────────────────────────────────────┐
+│                   init_main()  [PID 1]                   │
+│                                                          │
+│  /etc  /dev  /proc  /tmp  /mnt (FAT32 if disk present)  │
+│  writes: nexos.conf  passwd  motd  nsh.rc                │
+└─────────────────────────┬────────────────────────────────┘
+                          │ nsh_main()
+                          ▼
+┌──────────────────────────────────────────────────────────┐
+│                    nsh  [shell]                          │
+│                                                          │
+│  sources /etc/nsh.rc                                     │
+│  prompt → read_line (history, tab-complete)              │
+│    → nsh_exec_line                                       │
+│        ├─ pipe:       cmd1 | cmd2                        │
+│        ├─ redirect:   cmd > file  /  cmd >> file         │
+│        ├─ background: cmd &                              │
+│        └─ built-in:   25 commands                        │
+│                                                          │
+│  syscall: INT 0x80 → ring 0 handler → IRET → ring 3     │
+└──────────────────────────────────────────────────────────┘
+```
 
 ---
 
 ## Syscall Table
 
-| Number | Name | Arguments | Description |
-|--------|------|-----------|-------------|
-| 0 | `sys_exit` | code | Terminate process |
-| 1 | `sys_read` | fd, buf, len | Read from fd |
-| 2 | `sys_write` | fd, buf, len | Write to fd |
-| 3 | `sys_open` | path, flags | Open file |
-| 4 | `sys_close` | fd | Close file descriptor |
-| 5 | `sys_fork` | — | Create child process |
-| 6 | `sys_exec` | path, argv | Replace process image |
-| 7 | `sys_getpid` | — | Get process ID |
-| 8 | `sys_sleep` | ms | Sleep for milliseconds |
-| 9 | `sys_stat` | path, stat_buf | Get file info |
-| 10 | `sys_mkdir` | path | Create directory |
-| 11 | `sys_readdir` | fd, dirent | Read directory entry |
-| 12 | `sys_getcwd` | buf, size | Get working directory |
-| 13 | `sys_chdir` | path | Change directory |
-| 14 | `sys_sbrk` | increment | Grow heap |
-
-Syscalls use `INT 0x80`. Arguments in: `rax`=num, `rdi`=a1, `rsi`=a2, `rdx`=a3, `r10`=a4, `r8`=a5. Return in `rax`.
+| # | Name | rdi | rsi | rdx | Returns |
+|---|------|-----|-----|-----|---------|
+| 0 | `sys_read` | fd | buf | len | bytes read |
+| 1 | `sys_write` | fd | buf | len | bytes written |
+| 2 | `sys_open` | path | flags | — | fd or -1 |
+| 3 | `sys_close` | fd | — | — | 0 or -1 |
+| 4 | `sys_exit` | code | — | — | — |
+| 5 | `sys_getpid` | — | — | — | PID |
+| 6 | `sys_sleep` | ms | — | — | 0 |
+| 7 | `sys_stat` | path | stat_buf | — | 0 or -1 |
+| 8 | `sys_mkdir` | path | — | — | 0 or -1 |
+| 9 | `sys_getcwd` | buf | size | — | 0 or -1 |
+| 10 | `sys_chdir` | path | — | — | 0 or -1 |
+| 11 | `sys_exec` | path | argv | — | — |
+| 12 | `sys_fork` | — | — | — | child PID |
+| 13 | `sys_wait` | pid | — | — | exit code |
+| 14 | `sys_sbrk` | incr | — | — | new brk |
 
 ---
 
-## Known Limitations & Future Roadmap
+## File Layout
 
-### Current Limitations (v0.1)
-- No SMP (single CPU only)
-- No UEFI boot (legacy BIOS only)
-- No networking stack (stub only)
-- No DMA for disk I/O (PIO polling only)
-- No dynamic linking / shared libraries
-- FAT32 write support is basic (no directory entry update for existing files)
-- Scheduler runs processes cooperatively within the kernel (no ring 3 preemption yet)
-
-### Roadmap
-- [ ] Ring 3 user-mode processes with proper syscall entry
-- [ ] Network stack (e1000 driver → TCP/IP)
-- [ ] UEFI boot via GRUB EFI
-- [ ] SMP support (APIC, CPU cores)
-- [ ] ELF binary loader for external programs
-- [ ] TTY layer and ANSI terminal emulation
-- [ ] `/proc` virtual filesystem
-- [ ] ext2/ext4 filesystem support
-- [ ] NexOS package manager
+```
+nexos/
+├── Makefile
+├── README.md
+├── boot/
+│   ├── linker.ld              Kernel linker script
+│   └── grub/grub.cfg          GRUB2 menu entry
+├── kernel/
+│   ├── kernel.h / kernel.c    Entry, klog, kpanic, I/O helpers
+│   ├── include/               Freestanding stdint/stddef/stdbool/stdarg
+│   ├── arch/x86_64/
+│   │   ├── boot.asm           Multiboot2 entry, long mode setup
+│   │   ├── gdt.c / gdt.h      GDT + TSS, tss_set_rsp0()
+│   │   ├── gdt_flush.asm      lgdt + ltr stubs
+│   │   ├── idt.c / idt.h      IDT, PIC init, irq_install_handler
+│   │   ├── isr.asm            ISR/IRQ stubs (pushes registers_t)
+│   │   ├── paging.c / .h      4-level page tables, vmm_map_page
+│   │   └── enter_ring3.asm    IRET into ring 3
+│   ├── drivers/
+│   │   ├── vga.c / .h         Text-mode video
+│   │   ├── serial.c / .h      COM1 debug output
+│   │   ├── keyboard.c / .h    PS/2 IRQ1, scancode map
+│   │   ├── timer.c / .h       PIT 1000 Hz
+│   │   ├── ata.c / .h         ATA PIO read/write
+│   │   ├── pci.c / .h         PCI bus enumeration
+│   │   └── rtc.c / .h         CMOS real-time clock
+│   ├── mm/
+│   │   ├── pmm.c / .h         Physical memory bitmap allocator
+│   │   ├── heap.c / .h        Kernel heap (kmalloc/kfree)
+│   │   └── vmm.c / .h         High-level VMM wrapper
+│   ├── fs/
+│   │   ├── vfs.c / .h         Virtual filesystem layer
+│   │   ├── ramfs.c / .h       In-memory filesystem
+│   │   ├── fat32.c / .h       FAT32 + LFN driver
+│   │   └── procfs.c / .h      /proc virtual filesystem
+│   ├── proc/
+│   │   ├── process.c / .h     PCB, proc_create, proc_enter_ring3
+│   │   ├── scheduler.c / .h   Round-robin scheduler
+│   │   └── syscall.c / .h     INT 0x80 dispatch (15 calls)
+│   └── net/
+│       ├── net.h              net_interface, ip_packet structs
+│       └── net.c              net_init() stub
+├── userspace/
+│   ├── init/init.c            PID 1 init process
+│   ├── shell/nsh.c            Interactive shell
+│   └── libc/                  Minimal C library stubs
+└── tools/
+    ├── build_iso.sh           grub-mkrescue wrapper
+    ├── run_qemu.sh            QEMU launcher
+    ├── run_qemu_debug.sh      QEMU + GDB stub
+    └── install_usb.py         USB installer
+```
 
 ---
 
 ## License
 
-MIT License — Copyright (c) 2024 NexOS Project
-
-Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+MIT — see individual source file headers.

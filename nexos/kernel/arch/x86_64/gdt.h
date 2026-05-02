@@ -37,5 +37,8 @@ typedef struct {
 } __attribute__((packed)) tss_t;
 
 void gdt_init(void);
+void tss_set_rsp0(uint64_t rsp0);
+
+extern tss_t tss;
 
 #endif

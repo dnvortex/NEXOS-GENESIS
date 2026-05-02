@@ -61,5 +61,11 @@ void gdt_init(void) {
     gdt_flush((uint64_t)&gdtr);
     tss_flush();
 
-    klog(LOG_INFO, "GDT initialized");
+    klog(LOG_INFO, "GDT initialized (ring 0/3, TSS loaded)");
+}
+
+/* Update TSS rsp0 — called on every process switch so syscalls land
+   on the correct kernel stack for the current process. */
+void tss_set_rsp0(uint64_t rsp0) {
+    tss.rsp0 = rsp0;
 }
