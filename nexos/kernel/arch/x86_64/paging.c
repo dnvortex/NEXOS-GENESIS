@@ -105,7 +105,7 @@ void paging_init(void) {
     kernel_pml4 = (uint64_t *)(cr3_val & ~0xFFFULL);
 
     klog(LOG_INFO,
-         "Paging: inherited boot PML4 at 0x%x — first 4 MB identity-mapped",
+         "Paging: inherited boot PML4 at 0x%x - first 4 MB identity-mapped",
          (uint64_t)kernel_pml4);
 }
 

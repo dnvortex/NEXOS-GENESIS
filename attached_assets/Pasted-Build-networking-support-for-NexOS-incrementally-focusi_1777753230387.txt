@@ -1,0 +1,134 @@
+Build networking support for NexOS incrementally, focusing ONLY on Ethernet via an emulated NIC in QEMU. Do NOT implement WiFi. Target the RTL8139 network card for simplicity.
+
+════════════════════════════════════
+PHASE 1 — RTL8139 DRIVER
+════════════════════════════════════
+
+Create kernel/drivers/net/rtl8139.c and rtl8139.h.
+
+Requirements:
+
+* Detect RTL8139 via PCI scan (Vendor ID 0x10EC, Device ID 0x8139)
+* Read BAR0 to get I/O base address
+* Enable bus mastering in PCI command register
+* Reset card via command register (write 0x10 to CR)
+* Allocate RX buffer (8KB + 16 + padding)
+* Set RBSTART register with RX buffer physical address
+* Configure receive and transmit registers
+* Enable RX and TX
+
+Implement:
+
+* rtl8139_init()
+* rtl8139_send_packet(void* data, uint32_t len)
+* rtl8139_receive_packet()
+
+Log all steps using klog(INFO, ...)
+
+════════════════════════════════════
+PHASE 2 — ETHERNET LAYER
+════════════════════════════════════
+
+Create kernel/net/ethernet.c and ethernet.h
+
+Define ethernet frame:
+
+* dest MAC (6 bytes)
+* src MAC (6 bytes)
+* ethertype (2 bytes)
+* payload
+
+Implement:
+
+* ethernet_send(dest_mac, ethertype, payload, size)
+* ethernet_receive(frame)
+
+Handle:
+
+* ETH_TYPE_ARP (0x0806)
+* ETH_TYPE_IP  (0x0800)
+
+════════════════════════════════════
+PHASE 3 — ARP
+════════════════════════════════════
+
+Create kernel/net/arp.c
+
+Implement:
+
+* arp_request(target_ip)
+* arp_reply(request)
+* arp_table (cache of IP → MAC)
+
+On receiving ARP request for our IP → send reply.
+
+════════════════════════════════════
+PHASE 4 — IPv4
+════════════════════════════════════
+
+Create kernel/net/ip.c
+
+Implement:
+
+* IPv4 header struct
+* ip_send(dest_ip, protocol, payload)
+* ip_receive(packet)
+
+Ignore fragmentation for now.
+
+════════════════════════════════════
+PHASE 5 — ICMP (PING)
+════════════════════════════════════
+
+Create kernel/net/icmp.c
+
+Implement:
+
+* ICMP echo request/reply
+* On receiving ping → reply
+* Provide function: icmp_send_echo(dest_ip)
+
+════════════════════════════════════
+PHASE 6 — QEMU NETWORK SETUP
+════════════════════════════════════
+
+Modify run_qemu.sh:
+
+qemu-system-x86_64 
+-cdrom nexos.iso 
+-hda nexos.img 
+-m 256M 
+-serial stdio 
+-netdev user,id=net0 
+-device rtl8139,netdev=net0
+
+════════════════════════════════════
+PHASE 7 — TESTING
+════════════════════════════════════
+
+On boot:
+
+* Initialize RTL8139
+* Print detected MAC address
+* Send ARP request for gateway (10.0.2.2 in QEMU)
+* Send ICMP ping to 10.0.2.2
+
+Expected output:
+
+* "RTL8139 initialized"
+* "MAC: XX:XX:XX:XX:XX:XX"
+* "ARP resolved: 10.0.2.2 → MAC"
+* "Ping reply received"
+
+════════════════════════════════════
+RULES
+════════════════════════════════════
+
+* Build step-by-step, test each phase before moving on
+* Do NOT implement TCP, UDP, DHCP, or DNS yet
+* Do NOT attempt WiFi
+* All code must be kernel-space
+* Use existing memory manager for buffers
+* Log all failures clearly
+
+Start with PHASE 1 and ensure the NIC is detected before proceeding.

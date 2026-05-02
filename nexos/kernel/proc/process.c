@@ -135,7 +135,7 @@ process_t *proc_create(const char *name, void (*entry)(void), uint8_t priority) 
     }
 
     klog(LOG_DEBUG,
-         "proc_create: '%s' pid=%u kstack=0x%x–0x%x entry=0x%x",
+         "proc_create: '%s' pid=%u kstack=0x%x-0x%x entry=0x%x",
          name, proc->pid,
          (uint64_t)(uintptr_t)proc->stack,
          kstack_top,
@@ -175,7 +175,7 @@ void proc_enter_ring3(process_t *proc) {
 
     if (proc->context.cs == GDT_KERNEL_CODE) {
         klog(LOG_INFO,
-             "Launching '%s' (pid %u) as kernel thread — entry=0x%x stack=0x%x",
+             "Launching '%s' (pid %u) as kernel thread - entry=0x%x stack=0x%x",
              proc->name, proc->pid, proc->context.rip, kstack_top);
 
         /* Switch to this process's kernel stack and jump to entry.
@@ -187,7 +187,7 @@ void proc_enter_ring3(process_t *proc) {
         cli(); for (;;) hlt();
     } else {
         klog(LOG_INFO,
-             "Launching '%s' (pid %u) ring-3 — entry=0x%x user_stack=0x%x",
+             "Launching '%s' (pid %u) ring-3 - entry=0x%x user_stack=0x%x",
              proc->name, proc->pid,
              proc->context.rip, proc->user_stack_top);
         enter_ring3(proc->context.rip, proc->user_stack_top);

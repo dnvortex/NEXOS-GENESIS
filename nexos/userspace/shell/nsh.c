@@ -15,6 +15,8 @@
 #include "../../kernel/proc/scheduler.h"
 #include "../../kernel/mm/pmm.h"
 #include "../../kernel/drivers/rtl8139.h"
+#include "../../kernel/net/icmp.h"
+#include "../../kernel/net/ethernet.h"
 
 /* ════════════════════════════════════════
  * String helpers (no libc)
@@ -653,14 +655,7 @@ static void print_hex32(uint64_t v) {
     for (int i = 7; i >= 0; i--) { buf[i] = hx[v & 0xF]; v >>= 4; }
     nsh_print(buf);
 }
-static uint16_t net_checksum(const void *data, size_t len) {
-    const uint16_t *p = (const uint16_t *)data;
-    uint32_t sum = 0;
-    while (len > 1) { sum += *p++; len -= 2; }
-    if (len) sum += *(const uint8_t *)p;
-    while (sum >> 16) sum = (sum & 0xFFFF) + (sum >> 16);
-    return (uint16_t)~sum;
-}
+
 static int parse_ip(const char *s, uint8_t ip[4]) {
     int o = 0, val = 0, dots = 0;
     for (int i = 0; s[i]; i++) {
@@ -987,22 +982,6 @@ static int cmd_ifconfig(int argc, char *argv[]) {
 }
 
 /* ── ping ────────────────────────────────────────────────────────────────── */
-static int s_ping_got_reply;
-static uint8_t s_ping_src_ip[4];
-
-static void ping_rx_handler(const uint8_t *pkt, uint16_t len) {
-    if (len < 42) return;
-    if (pkt[12] != 0x08 || pkt[13] != 0x00) return;   /* not IPv4      */
-    if (pkt[23] != 1)                         return;   /* not ICMP      */
-    if (pkt[34] != 0)                         return;   /* not echo reply */
-    /* Check ICMP id == 0x1234 */
-    if (pkt[38] != 0x12 || pkt[39] != 0x34)  return;
-    /* Check source IP == our target */
-    if (pkt[26] != s_ping_src_ip[0] || pkt[27] != s_ping_src_ip[1] ||
-        pkt[28] != s_ping_src_ip[2] || pkt[29] != s_ping_src_ip[3]) return;
-    s_ping_got_reply = 1;
-}
-
 static int cmd_ping(int argc, char *argv[]) {
     if (argc < 2) { nsh_println("ping: usage: ping <ip>"); return 1; }
     if (!rtl8139_found()) { nsh_println("ping: no network interface"); return 1; }
@@ -1011,62 +990,21 @@ static int cmd_ping(int argc, char *argv[]) {
     if (parse_ip(argv[1], dst_ip) < 0) {
         nsh_print("ping: invalid IP address: "); nsh_println(argv[1]); return 1;
     }
+    uint32_t dest_ip = ((uint32_t)dst_ip[0] << 24) | ((uint32_t)dst_ip[1] << 16)
+                     | ((uint32_t)dst_ip[2] <<  8) |  dst_ip[3];
 
     char buf[32];
-    nsh_print("PING "); nsh_print(argv[1]); nsh_println(" 56 bytes of data.");
-
-    uint8_t our_mac[6];  rtl8139_get_mac(our_mac);
-    const uint8_t our_ip[4] = { 10, 0, 2, 15 };
-
-    /* Store target IP for RX callback filter */
-    for (int i = 0; i < 4; i++) s_ping_src_ip[i] = dst_ip[i];
-    rtl8139_set_rx_callback(ping_rx_handler);
+    nsh_print("PING "); nsh_print(argv[1]); nsh_println(" 40 bytes of data.");
 
     int received = 0;
     for (int seq = 1; seq <= 4; seq++) {
-        uint8_t frame[42];
-        /* Ethernet */
-        for (int i = 0; i < 6; i++) frame[i]   = 0xFF;       /* dst broadcast */
-        for (int i = 0; i < 6; i++) frame[6+i] = our_mac[i]; /* src */
-        frame[12] = 0x08; frame[13] = 0x00;
-        /* IP header */
-        frame[14] = 0x45; frame[15] = 0x00;
-        frame[16] = 0x00; frame[17] = 0x1C;  /* total len = 28 */
-        frame[18] = (uint8_t)(seq >> 8); frame[19] = (uint8_t)seq; /* id = seq */
-        frame[20] = 0x40; frame[21] = 0x00;  /* DF flag */
-        frame[22] = 64;   frame[23] = 1;     /* TTL=64, proto=ICMP */
-        frame[24] = 0;    frame[25] = 0;     /* checksum placeholder */
-        for (int i = 0; i < 4; i++) frame[26+i] = our_ip[i];
-        for (int i = 0; i < 4; i++) frame[30+i] = dst_ip[i];
-        uint16_t iph_cksum = net_checksum(&frame[14], 20);
-        frame[24] = (uint8_t)(iph_cksum >> 8);
-        frame[25] = (uint8_t)(iph_cksum);
-        /* ICMP */
-        frame[34] = 8;  frame[35] = 0;  /* type=echo request, code=0 */
-        frame[36] = 0;  frame[37] = 0;  /* checksum placeholder */
-        frame[38] = 0x12; frame[39] = 0x34; /* id */
-        frame[40] = (uint8_t)(seq >> 8); frame[41] = (uint8_t)seq;
-        uint16_t icmp_cksum = net_checksum(&frame[34], 8);
-        frame[36] = (uint8_t)(icmp_cksum >> 8);
-        frame[37] = (uint8_t)(icmp_cksum);
-
-        s_ping_got_reply = 0;
-        uint64_t t0 = timer_get_ticks();
-        rtl8139_send(frame, 42);
-
-        /* Poll up to 1000 ms for reply */
-        while (timer_get_ticks() - t0 < 1000) {
-            rtl8139_receive();
-            if (s_ping_got_reply) break;
-            timer_sleep_ms(10);
-        }
-
-        uint64_t rtt = timer_get_ticks() - t0;
-        if (s_ping_got_reply) {
+        int rtt = icmp_send_echo(dest_ip);
+        if (rtt >= 0) {
             received++;
-            nsh_print("64 bytes from "); nsh_print(argv[1]);
+            nsh_print("40 bytes from "); nsh_print(argv[1]);
             nsh_print(": icmp_seq="); nsh_uint_str((uint64_t)seq, buf); nsh_print(buf);
-            nsh_print(" ttl=64 time="); nsh_uint_str(rtt, buf); nsh_print(buf); nsh_println(" ms");
+            nsh_print(" ttl=64 time="); nsh_uint_str((uint64_t)rtt, buf);
+            nsh_print(buf); nsh_println(" ms");
         } else {
             nsh_print("Request timeout for icmp_seq=");
             nsh_uint_str((uint64_t)seq, buf); nsh_println(buf);
@@ -1074,13 +1012,10 @@ static int cmd_ping(int argc, char *argv[]) {
         if (seq < 4) timer_sleep_ms(1000);
     }
 
-    rtl8139_set_rx_callback(NULL);
-
-    /* Summary */
     nsh_println("");
     nsh_print("--- "); nsh_print(argv[1]); nsh_println(" ping statistics ---");
-    nsh_print("4 packets transmitted, "); nsh_uint_str((uint64_t)received, buf);
-    nsh_print(buf); nsh_println(" received");
+    nsh_print("4 packets transmitted, ");
+    nsh_uint_str((uint64_t)received, buf); nsh_print(buf); nsh_println(" received");
     return (received > 0) ? 0 : 1;
 }
 

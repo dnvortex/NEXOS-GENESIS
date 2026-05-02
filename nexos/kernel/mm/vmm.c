@@ -5,7 +5,7 @@
 #include "../arch/x86_64/paging.h"
 
 void vmm_init(void) {
-    klog(LOG_INFO, "VMM: initialized — 4-level paging active");
+    klog(LOG_INFO, "VMM: initialized - 4-level paging active");
 }
 
 /* Map a physical page to a virtual address in the kernel PML4 */

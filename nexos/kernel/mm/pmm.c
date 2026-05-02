@@ -47,7 +47,7 @@ void pmm_init(uint64_t mem_lower, uint64_t mem_upper) {
     pmm_free_pages  = 0;
     pmm_last_alloc  = 0;
 
-    klog(LOG_INFO, "PMM: initialized — %llu MB physical memory ceiling",
+    klog(LOG_INFO, "PMM: initialized - %llu MB physical memory ceiling",
          mem_upper / (1024 * 1024));
 }
 

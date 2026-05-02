@@ -35,7 +35,7 @@ void heap_init(void *start, size_t size) {
     uint8_t *data = (uint8_t *)start + sizeof(heap_block_t);
     for (size_t i = 0; i < heap_head->size; i++) data[i] = 0;
 
-    klog(LOG_INFO, "Heap: 0x%x – 0x%x (%u MB), header=%u B",
+    klog(LOG_INFO, "Heap: 0x%x - 0x%x (%u MB), header=%u B",
          (uint64_t)(uintptr_t)start,
          (uint64_t)(uintptr_t)heap_end,
          (unsigned)(size >> 20),
@@ -66,7 +66,7 @@ void *kmalloc(size_t size) {
         curr = curr->next;
     }
 
-    klog(LOG_ERROR, "Heap: kmalloc(%u) failed — out of memory", (unsigned)size);
+    klog(LOG_ERROR, "Heap: kmalloc(%u) failed - out of memory", (unsigned)size);
     return NULL;
 }
 
