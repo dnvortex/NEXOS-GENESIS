@@ -51,6 +51,18 @@ typedef struct process {
     uint32_t      time_slice_ms;
     uint32_t      time_used_ms;
     char          name[64];
+
+    /* Per-fd file position (updated by read/write/lseek) */
+    uint64_t      fd_offsets[MAX_FDS];
+
+    /* Program break (sys_brk) — set to 0 until first use */
+    uint64_t      brk;
+
+    /* mmap allocation base — grows upward from first use */
+    uint64_t      mmap_base;
+
+    /* File creation mask (sys_umask) */
+    uint32_t      umask;
 } process_t;
 
 void       proc_init(void);

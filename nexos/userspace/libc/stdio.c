@@ -6,7 +6,7 @@
 static long sys_write(int fd, const void *buf, size_t len) {
     long ret;
     __asm__ volatile (
-        "mov $2, %%rax\n"   /* SYS_WRITE */
+        "mov $1, %%rax\n"   /* SYS_WRITE = 1 (Linux x86_64 ABI) */
         "mov %1, %%rdi\n"
         "mov %2, %%rsi\n"
         "mov %3, %%rdx\n"
@@ -22,7 +22,7 @@ static long sys_write(int fd, const void *buf, size_t len) {
 static long sys_read(int fd, void *buf, size_t len) {
     long ret;
     __asm__ volatile (
-        "mov $1, %%rax\n"   /* SYS_READ */
+        "mov $0, %%rax\n"   /* SYS_READ = 0 (Linux x86_64 ABI) */
         "mov %1, %%rdi\n"
         "mov %2, %%rsi\n"
         "mov %3, %%rdx\n"

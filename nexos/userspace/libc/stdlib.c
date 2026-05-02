@@ -93,7 +93,7 @@ void *realloc(void *ptr, size_t size) {
 }
 
 void exit(int code) {
-    syscall(0, (long)code, 0, 0);
+    syscall(60, (long)code, 0, 0);   /* SYS_EXIT = 60 (Linux x86_64 ABI) */
     for (;;);
 }
 
