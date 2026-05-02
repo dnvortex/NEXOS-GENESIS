@@ -1,0 +1,96 @@
+NexOS now boots and init starts (PID 1 running as kernel thread) 
+but crashes with:
+
+  [INFO] init: PID 1 starting
+  [INFO] init: /dev populated
+  [ERROR] Heap: kmalloc(40) failed → out of memory
+  *** KERNEL EXCEPTION ***
+  Invalid Opcode → System Halted
+
+Two bugs to fix:
+
+════════════════════════════════════════
+FIX 1 — Increase heap size to 16MB
+════════════════════════════════════════
+Read kernel/mm/heap.c and kernel/kernel.c.
+
+Find where HEAP_SIZE or the heap is defined/initialized.
+The current heap is 2048 KB (2MB) — increase it to 16MB:
+
+  #define HEAP_SIZE (16 * 1024 * 1024)  // 16MB
+
+The heap starts at 0x118000. Make sure the heap end address 
+(0x118000 + 16MB = approx 0x1118000) does not overlap the 
+PMM bitmap or any other reserved region. 
+
+Also in pmm.c or kernel.c where the kernel image is reserved 
+with pmm_deinit_region(), make sure the reservation covers 
+the full heap:
+  pmm_deinit_region(0x118000, 16 * 1024 * 1024);
+
+════════════════════════════════════════
+FIX 2 — Add NULL checks after every kmalloc in init.c
+════════════════════════════════════════
+Read userspace/init/init.c in full.
+
+After EVERY kmalloc() or similar allocation call, add a 
+NULL check before using the pointer:
+
+  void *ptr = kmalloc(size);
+  if (!ptr) {
+      klog(ERROR, "init: kmalloc failed for <description>");
+      return;  // or continue, depending on context
+  }
+
+This prevents the Invalid Opcode crash which happens when 
+a NULL pointer is used as a function pointer or dereferenced 
+as a struct.
+
+════════════════════════════════════════
+FIX 3 — Add NULL checks in nsh.c
+════════════════════════════════════════
+Read userspace/shell/nsh.c and do the same — add NULL checks 
+after every kmalloc/malloc call before the pointer is used.
+
+════════════════════════════════════════
+FIX 4 — Add NULL checks in vfs.c and ramfs.c
+════════════════════════════════════════
+Read kernel/fs/vfs.c and kernel/fs/ramfs.c.
+Add NULL checks after every kmalloc call in both files.
+If kmalloc returns NULL, log an error and return -1 or NULL 
+from the function rather than crashing.
+
+════════════════════════════════════════
+FIX 5 — Invalid Opcode handler: print RIP
+════════════════════════════════════════
+In kernel/arch/x86_64/idt.c, in the handler for vector 6 
+(Invalid Opcode / #UD), print the RIP where it happened:
+
+  klog(ERROR, "Invalid Opcode at RIP=0x%x", regs->rip);
+  klog(ERROR, "Possible NULL function pointer call");
+
+This will help diagnose any future crashes.
+
+════════════════════════════════════════
+FIX 6 — Reduce memory usage in subsystem init
+════════════════════════════════════════
+Read kernel/fs/ramfs.c and kernel/fs/vfs.c.
+
+The ramfs and VFS are likely pre-allocating large buffers 
+or node arrays at init time. Change them to allocate nodes 
+lazily (only when a file/directory is actually created) 
+rather than pre-allocating arrays of 64 or 128 nodes at 
+startup. Each ramfs node that is pre-allocated wastes 
+kmalloc memory before init even runs.
+
+════════════════════════════════════════
+AFTER FIXES
+════════════════════════════════════════
+1. Run make clean && make all — zero errors required
+2. Show the new HEAP_SIZE value and where it is defined
+3. Show the PMM reservation for the heap region  
+4. Confirm nexos.iso rebuilt at correct size
+5. The expected result after these fixes:
+   - All boot messages appear
+   - init runs fully without kmalloc errors
+   - nsh shell prompt appears: [root@nexos /]$

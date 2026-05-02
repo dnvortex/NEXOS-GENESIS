@@ -104,11 +104,19 @@ boot_start:
     or  eax, 0x03
     mov [boot_pdpt], eax
 
-    ;  PD[0]  → 0x000000, 2 MB huge page (present | writable | PS)
-    mov dword [boot_pd + 0], 0x000083
-
-    ;  PD[1]  → 0x200000, 2 MB huge page (present | writable | PS)
-    mov dword [boot_pd + 8], 0x200083
+    ;  PD[0..15] → 32 MB identity map as 2 MB huge pages
+    ;  Covers the full kernel image + 16 MB BSS heap (kernel_end ≈ 17.5 MB)
+    ;  Each entry n:  physical = n×2MB,  flags = PS|RW|P (0x83)
+    xor  ecx, ecx
+.fill_pd:
+    mov  eax, ecx
+    shl  eax, 21                          ; n × 2 MB
+    or   eax, 0x83                        ; page-size | writable | present
+    mov  [boot_pd + ecx*8],     eax       ; low 32 bits
+    mov  dword [boot_pd + ecx*8 + 4], 0  ; high 32 bits (< 4 GB)
+    inc  ecx
+    cmp  ecx, 16                          ; 16 entries × 2 MB = 32 MB
+    jl   .fill_pd
 
     ; ── 3. Load GDT (must be done before enabling long mode) ─────────────────
     lgdt [gdt64_ptr]

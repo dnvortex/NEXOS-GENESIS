@@ -92,12 +92,16 @@ static void reap_zombies(void) {
 void init_main(void) {
     klog(LOG_INFO, "init: PID 1 starting");
 
+    /* Create mount/tmp dirs BEFORE try_mount_disk so vfs_mount("/mnt",...)
+     * finds an existing directory to overlay.  Without this, fat32_mount
+     * allocates ~1 KB then vfs_mount fails silently (no mount point), leaking
+     * that memory and leaving /mnt absent for the shell. */
+    vfs_mkdir("/mnt");
+    vfs_mkdir("/tmp");
+
     setup_etc();
     setup_dev();
     try_mount_disk();
-
-    vfs_mkdir("/mnt");
-    vfs_mkdir("/tmp");
     /* /proc is already mounted by procfs_init() in kernel_main */
 
     klog(LOG_INFO, "init: launching shell (nsh)");

@@ -181,9 +181,40 @@ static void handle_page_fault(registers_t *regs) {
 void isr_handler(registers_t *regs) {
     uint64_t vec = regs->int_no;
 
-    /* Detailed per-exception handler for page fault */
+    /* Detailed per-exception handler for page fault (#PF) */
     if (vec == 14) {
         handle_page_fault(regs);
+        cli();
+        for (;;) hlt();
+    }
+
+    /* Invalid Opcode (#UD) — almost always a NULL/garbage function pointer */
+    if (vec == 6) {
+        serial_printf("\n[#UD INVALID OPCODE]\n");
+        serial_printf("  RIP    = 0x%llx  (instruction that faulted)\n", regs->rip);
+        serial_printf("  CS     = 0x%llx  (ring %llu)\n", regs->cs, regs->cs & 3);
+        serial_printf("  RSP    = 0x%llx  SS=0x%llx\n", regs->rsp, regs->ss);
+        serial_printf("  RFLAGS = 0x%llx\n", regs->rflags);
+        serial_printf("  RAX=0x%llx  RBX=0x%llx  RCX=0x%llx  RDX=0x%llx\n",
+            regs->rax, regs->rbx, regs->rcx, regs->rdx);
+        serial_printf("  Hint: RIP=0 → NULL fn-ptr call; RIP=0xUD... → stack corruption\n");
+
+        vga_set_color(VGA_COLOR_RED, VGA_COLOR_BLACK);
+        vga_puts("\n\n*** INVALID OPCODE (#UD) ***\n");
+
+        static char ud_buf[80];
+        const char *hx2 = "0123456789abcdef";
+        int bi2 = 0;
+        ud_buf[bi2++]='R'; ud_buf[bi2++]='I'; ud_buf[bi2++]='P';
+        ud_buf[bi2++]='='; ud_buf[bi2++]='0'; ud_buf[bi2++]='x';
+        uint64_t rip2 = regs->rip;
+        for (int s = 60; s >= 0; s -= 4) ud_buf[bi2++] = hx2[(rip2 >> s) & 0xF];
+        ud_buf[bi2++] = '\n'; ud_buf[bi2] = 0;
+        vga_puts(ud_buf);
+
+        vga_puts("Likely cause: NULL/corrupted function pointer or stack smash\n");
+        vga_puts("System halted.\n");
+        vga_set_color(VGA_COLOR_LIGHT_GREY, VGA_COLOR_BLACK);
         cli();
         for (;;) hlt();
     }

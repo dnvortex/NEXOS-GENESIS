@@ -3,8 +3,9 @@
 #include "../kernel.h"
 #include "../mm/heap.h"
 
-#define RAMFS_MAX_CHILDREN 64
-#define RAMFS_MAX_DATA     (4 * 1024 * 1024)  /* 4MB per file max */
+/* 16 children saves 384 bytes per node vs 64 (each ptr is 8 bytes).
+ * The boot-time root has 9 top-level dirs; 16 gives headroom for user dirs. */
+#define RAMFS_MAX_CHILDREN 16
 
 typedef struct ramfs_node {
     vfs_node_t      vnode;

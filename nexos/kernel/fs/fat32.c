@@ -157,8 +157,8 @@ static void fat32_populate_node(vfs_node_t *vnode, fat32_volume_t *vol,
     }
 }
 
-/* Enumerate all entries in a directory cluster chain */
-#define MAX_DIR_ENTRIES 512
+/* 64 entries × sizeof(vfs_node_t)=360 = 23 KB per call (was 512→184 KB). */
+#define MAX_DIR_ENTRIES 64
 static int fat32_enum_dir(fat32_volume_t *vol, uint32_t first_cluster,
                            vfs_node_t *nodes, int *count, int max) {
     uint32_t bpc = vol->bytes_per_cluster;

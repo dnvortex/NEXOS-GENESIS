@@ -136,8 +136,10 @@ void kpanic(const char *fmt, ...) {
     klog(LOG_PANIC, "PANIC — system halted");
 }
 
-/* ── Static kernel heap (2 MB, placed in BSS — covered by kernel_end) ───── */
-#define HEAP_SIZE (2 * 1024 * 1024)
+/* ── Static kernel heap (16 MB, placed in BSS — covered by kernel_end) ──── */
+/* boot.asm identity-maps 32 MB (16×2MB huge pages), so kernel_end ≈ 17.5 MB */
+/* is safely within that window even with the full 16 MB heap in BSS.         */
+#define HEAP_SIZE (16 * 1024 * 1024)
 static uint8_t kernel_heap_area[HEAP_SIZE] __attribute__((aligned(4096)));
 
 /* ── Init process entry (userspace/init/init.c) ─────────────────────────── */
