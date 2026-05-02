@@ -978,19 +978,58 @@ static int cmd_ver(int argc, char *argv[]) {
 /* ── ifconfig ────────────────────────────────────────────────────────────── */
 static int cmd_ifconfig(int argc, char *argv[]) {
     (void)argc; (void)argv;
-    netif_t *nif = netif_get_default();
-    if (!nif) { nsh_println("eth0: not present"); return 0; }
-    char buf[32];
-    nsh_print(nif->name);
-    nsh_print(" UP  MAC: ");
-    for (int i = 0; i < 6; i++) {
-        print_hex_byte(nif->mac[i]);
-        if (i < 5) nsh_putchar(':');
+    int any = 0;
+
+    /* ── eth0 ── */
+    netif_t *nif = netif_find("eth0");
+    if (nif && (nif->flags & 1 /* NETIF_FLAG_UP */)) {
+        char buf[32];
+        any = 1;
+        nsh_print(nif->name);
+        nsh_print(": flags=UP,BROADCAST,RUNNING  mtu 1500");
+        nsh_println("");
+        nsh_println("        inet 10.0.2.15  netmask 255.255.255.0  broadcast 10.0.2.255");
+        nsh_println("        gateway 10.0.2.2");
+        nsh_print  ("        ether ");
+        for (int i = 0; i < 6; i++) {
+            print_hex_byte(nif->mac[i]);
+            if (i < 5) nsh_putchar(':');
+        }
+        nsh_println("");
+        nsh_print  ("        RX packets: "); nsh_uint_str(rtl8139_get_rx_count(), buf); nsh_println(buf);
+        nsh_print  ("        TX packets: "); nsh_uint_str(rtl8139_get_tx_count(), buf); nsh_println(buf);
+        nsh_println("");
     }
+
+    /* ── wlan0 ── */
+    netif_t *wnif = netif_find("wlan0");
+    if (wnif && (wnif->flags & 1)) {
+        char buf[16];
+        any = 1;
+        nsh_println("wlan0: flags=UP,BROADCAST,RUNNING  mtu 1500");
+        if (wifi_is_connected()) {
+            int sig = wifi_get_signal();
+            nsh_println("        inet 10.0.2.20  netmask 255.255.255.0  broadcast 10.0.2.255");
+            nsh_print  ("        SSID: "); nsh_print(wifi_get_ssid());
+            nsh_print  ("  signal: "); nsh_uint_str((uint64_t)sig, buf);
+            nsh_print  (buf); nsh_println("%");
+        }
+        nsh_print  ("        ether ");
+        for (int i = 0; i < 6; i++) {
+            print_hex_byte(wnif->mac[i]);
+            if (i < 5) nsh_putchar(':');
+        }
+        nsh_println("");
+        nsh_println("");
+    }
+
+    /* ── lo ── */
+    any = 1;
+    nsh_println("lo:    flags=UP,LOOPBACK,RUNNING  mtu 65536");
+    nsh_println("        inet 127.0.0.1  netmask 255.0.0.0");
     nsh_println("");
-    nsh_println("     inet 10.0.2.15  netmask 255.255.255.0  gw 10.0.2.2");
-    nsh_print  ("     RX packets: "); nsh_uint_str(rtl8139_get_rx_count(), buf); nsh_println(buf);
-    nsh_print  ("     TX packets: "); nsh_uint_str(rtl8139_get_tx_count(), buf); nsh_println(buf);
+
+    if (!any) nsh_println("No network interfaces found");
     return 0;
 }
 
@@ -1178,7 +1217,7 @@ static const char *builtin_names[] = {
     "help","env","export","uname","uptime","ps","kill","free","date",
     "mount","reboot","halt","exit","logout",
     "hexdump","wc","head","tail","find","top","history","which","stat",
-    "tree","memmap","ver","ifconfig","ping","dns","wget","netstat",NULL
+    "tree","memmap","ver","ifconfig","ping","dns","wget","netstat","wifi",NULL
 };
 
 static void tab_complete(char *line, int *len) {

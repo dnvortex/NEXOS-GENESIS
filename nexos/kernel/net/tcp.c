@@ -184,12 +184,25 @@ int tcp_recv(tcp_conn_t *conn, uint8_t *buf, uint16_t maxlen,
         if (conn->rx_len > 0) {
             uint16_t n = conn->rx_len < maxlen ? conn->rx_len : maxlen;
             for (uint16_t i = 0; i < n; i++) buf[i] = conn->rx_buf[i];
-            conn->rx_len = 0;
+            /* Shift any remaining unread bytes to the front of the buffer
+             * instead of discarding them — fixes truncation of large HTTP
+             * responses that span multiple tcp_recv() calls.             */
+            uint16_t remaining = (uint16_t)(conn->rx_len - n);
+            for (uint16_t i = 0; i < remaining; i++)
+                conn->rx_buf[i] = conn->rx_buf[n + i];
+            conn->rx_len = remaining;
             return (int)n;
         }
         /* connection closed by remote */
         if (conn->state == TCP_STATE_CLOSE_WAIT
             || conn->state == TCP_STATE_CLOSED) {
+            /* Drain any final data the server sent before FIN */
+            if (conn->rx_len > 0) {
+                uint16_t n = conn->rx_len < maxlen ? conn->rx_len : maxlen;
+                for (uint16_t i = 0; i < n; i++) buf[i] = conn->rx_buf[i];
+                conn->rx_len = 0;
+                return (int)n;
+            }
             return 0;
         }
     }

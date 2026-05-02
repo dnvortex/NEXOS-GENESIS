@@ -336,8 +336,9 @@ void kernel_main(uint32_t mb2_magic, mb2_info_t *mb2_info) {
     rtc_init();
 
     /* ── 13. Network stack + RTL8139 + WiFi ──────────────────────────────── */
-    net_init();
+    /* RTL8139 MUST be initialized first — net_init() calls rtl8139_found()  */
     rtl8139_init();
+    net_init();
     wifi_init();
 
     /* ── 14. VFS + ramfs ──────────────────────────────────────────────────── */
