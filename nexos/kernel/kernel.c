@@ -23,7 +23,11 @@
 #include <stdarg.h>
 #include <stdint.h>
 
-/* ── Multiboot2 structures ─────────────────────────────────────────────────── */
+/* ── Linker symbols — used by PMM to precisely reserve the kernel image ──── */
+extern uint8_t kernel_start[];
+extern uint8_t kernel_end[];
+
+/* ── Multiboot2 structures (corrected field layout) ─────────────────────── */
 #define MB2_TAG_END  0
 #define MB2_TAG_MMAP 6
 
@@ -33,18 +37,33 @@ typedef struct { uint32_t total_size; uint32_t reserved; }
 typedef struct { uint32_t type; uint32_t size; }
     __attribute__((packed)) mb2_tag_t;
 
+/*
+ * FIXED: the original struct had spurious uint32_t type + size fields at the
+ * start (8 bytes that do NOT exist in an mmap entry), pushing base_addr to
+ * offset 8 and making mtype read garbage from the next entry.
+ *
+ * Correct Multiboot2 mmap entry layout (spec §3.6.8):
+ *   uint64_t base_addr
+ *   uint64_t length
+ *   uint32_t type        (1 = available RAM)
+ *   uint32_t reserved
+ */
 typedef struct {
-    uint32_t type; uint32_t size;
-    uint64_t base_addr; uint64_t length; uint32_t mtype;
+    uint64_t base_addr;
+    uint64_t length;
+    uint32_t mtype;     /* 1 = usable RAM */
+    uint32_t reserved;
 } __attribute__((packed)) mb2_mmap_entry_t;
 
 typedef struct {
-    uint32_t type; uint32_t size;
-    uint32_t entry_size; uint32_t entry_version;
-    mb2_mmap_entry_t entries[];
+    uint32_t type;
+    uint32_t size;
+    uint32_t entry_size;
+    uint32_t entry_version;
+    /* entries follow; stride = entry_size, NOT sizeof(mb2_mmap_entry_t) */
 } __attribute__((packed)) mb2_tag_mmap_t;
 
-/* ── Kernel log ─────────────────────────────────────────────────────────────── */
+/* ── Kernel log ─────────────────────────────────────────────────────────── */
 void klog(log_level_t level, const char *fmt, ...) {
     static const char *lnames[]  = {"DEBUG","INFO","WARN","ERROR","PANIC"};
     static const vga_color_t lcolors[] = {
@@ -112,24 +131,25 @@ void klog(log_level_t level, const char *fmt, ...) {
     if (level == LOG_PANIC) { cli(); for(;;) hlt(); }
 }
 
-void kpanic(const char *fmt, ...) { (void)fmt; klog(LOG_PANIC, "PANIC — system halted"); }
+void kpanic(const char *fmt, ...) {
+    (void)fmt;
+    klog(LOG_PANIC, "PANIC — system halted");
+}
 
-/* ── Static kernel heap (2 MB) ─────────────────────────────────────────────── */
+/* ── Static kernel heap (2 MB, placed in BSS — covered by kernel_end) ───── */
 #define HEAP_SIZE (2 * 1024 * 1024)
 static uint8_t kernel_heap_area[HEAP_SIZE] __attribute__((aligned(4096)));
 
-/* ── Init process entry (defined in userspace/init/init.c) ─────────────────── */
+/* ── Init process entry (userspace/init/init.c) ─────────────────────────── */
 extern void init_main(void);
 
-/* ── Kernel main ────────────────────────────────────────────────────────────── */
+/* ── Kernel main ─────────────────────────────────────────────────────────── */
 void kernel_main(uint32_t mb2_magic, mb2_info_t *mb2_info) {
 
     /*
-     * ── Step 0: Early VGA sentinel ──────────────────────────────────────────
-     * Write directly to the VGA text buffer before any subsystem is ready.
-     * If these characters appear on screen, kernel_main was reached from
-     * 64-bit long mode.  boot.asm already wrote "OK" at column 0; we write
-     * "KMAIN" starting at column 2 to extend the proof.
+     * ── Step 0: Early VGA sentinel ─────────────────────────────────────────
+     * Prove we reached kernel_main in 64-bit mode before any subsystem runs.
+     * boot.asm wrote "OK" at columns 0-1; we add "KMAIN" at columns 2-6.
      */
     volatile uint16_t *vga_early = (volatile uint16_t *)0xB8000;
     vga_early[2] = 0x0F4B;  /* 'K' */
@@ -138,22 +158,27 @@ void kernel_main(uint32_t mb2_magic, mb2_info_t *mb2_info) {
     vga_early[5] = 0x0F49;  /* 'I' */
     vga_early[6] = 0x0F4E;  /* 'N' */
 
-    /* ── 1. VGA driver (screen output) ──────────────────────────────────────── */
+    /* ── 1. VGA (screen output must come first) ──────────────────────────── */
     vga_init();
 
-    /* ── 2. Serial port (debug output) ──────────────────────────────────────── */
+    /* ── 2. Serial (debug output) ────────────────────────────────────────── */
     serial_init();
     serial_puts("\n=== NexOS Kernel Booting ===\n");
 
-    /* ── 3. GDT (with TSS for ring-0 / ring-3 switching) ────────────────────── */
+    /* ── 3. GDT (with TSS for ring-0 / ring-3 switching) ────────────────── */
     gdt_init();
 
-    /* ── 4. IDT (exception + IRQ handlers) ──────────────────────────────────── */
+    /* ── 4. IDT + enable interrupts ──────────────────────────────────────── */
     idt_init();
     sti();
 
-    /* ── 5. Physical Memory Manager ─────────────────────────────────────────── */
-    uint64_t mem_upper = 256 * 1024 * 1024;
+    /* ── 5. Physical Memory Manager ──────────────────────────────────────── */
+
+    /*
+     * Start with an upper-bound of 256 MB; the Multiboot2 memory map may
+     * extend this.  pmm_init() marks every frame as reserved.
+     */
+    uint64_t mem_upper = 256ULL * 1024 * 1024;
     pmm_init(0, mem_upper);
 
     if (mb2_magic == MULTIBOOT2_BOOTLOADER_MAGIC && mb2_info) {
@@ -161,54 +186,91 @@ void kernel_main(uint32_t mb2_magic, mb2_info_t *mb2_info) {
         while (1) {
             mb2_tag_t *tag = (mb2_tag_t *)tag_ptr;
             if (tag->type == MB2_TAG_END) break;
+
             if (tag->type == MB2_TAG_MMAP) {
                 mb2_tag_mmap_t *mmap = (mb2_tag_mmap_t *)tag;
                 uint32_t num = (mmap->size - 16) / mmap->entry_size;
+
                 for (uint32_t i = 0; i < num; i++) {
-                    mb2_mmap_entry_t *e = &mmap->entries[i];
-                    if (e->mtype == 1) pmm_init_region(e->base_addr, e->length);
-                    if (e->base_addr + e->length > mem_upper)
+                    /*
+                     * FIXED: iterate by entry_size bytes, not by
+                     * sizeof(mb2_mmap_entry_t), to handle varying
+                     * entry sizes correctly.
+                     */
+                    mb2_mmap_entry_t *e = (mb2_mmap_entry_t *)(
+                        (uint8_t *)mmap + 16 + (uint64_t)i * mmap->entry_size);
+
+                    if (e->mtype == 1) {
+                        pmm_init_region(e->base_addr, e->length);
+                    }
+                    if (e->base_addr + e->length > mem_upper) {
                         mem_upper = e->base_addr + e->length;
+                    }
                 }
             }
+
+            /* Tags are 8-byte aligned */
             uint32_t sz = tag->size;
             if (sz % 8) sz += 8 - (sz % 8);
             tag_ptr += sz;
         }
     } else {
-        pmm_init_region(0x100000, 63 * 1024 * 1024);
+        /* Fallback: assume 63 MB of conventional RAM above 1 MB */
+        pmm_init_region(0x100000, 63ULL * 1024 * 1024);
         klog(LOG_WARN, "No valid Multiboot2 info — using fallback memory map");
     }
 
-    /* Reserve first 4 MB: kernel image + boot page tables + stack */
-    pmm_deinit_region(0, 4 * 1024 * 1024);
+    /*
+     * Re-mark reserved regions as used (precise reservations).
+     *
+     * FIX: instead of a blunt 4 MB deinit, we reserve exactly:
+     *   a) First 1 MB — BIOS/legacy I/O area
+     *   b) Kernel image — from linker symbol kernel_start to kernel_end,
+     *      which covers: code, rodata, data, BSS (including the 2 MB static
+     *      heap, PMM bitmap, boot page tables, and boot stack).
+     *
+     * pmm_deinit_region() is now safe: it only decrements pmm_free_pages
+     * for frames that were actually free, preventing counter corruption.
+     */
+    pmm_deinit_region(0, 0x100000);   /* first 1 MB */
 
-    /* ── 6. Heap (static 2 MB arena, no VMM dependency) ─────────────────────── */
+    uint64_t kstart = (uint64_t)(uintptr_t)kernel_start;
+    uint64_t kend   = (uint64_t)(uintptr_t)kernel_end;
+    pmm_deinit_region(kstart, kend - kstart);  /* entire kernel binary + BSS */
+
+    klog(LOG_INFO, "PMM: kernel image 0x%x – 0x%x reserved (%llu KB)",
+         kstart, kend, (kend - kstart) / 1024);
+    klog(LOG_INFO, "PMM: %llu MB free of %llu MB total (%llu frames)",
+         pmm_get_free_memory()  / (1024 * 1024),
+         pmm_get_total_memory() / (1024 * 1024),
+         pmm_get_free_frames());
+
+    /* ── 6. Heap (static 2 MB arena, no VMM dependency) ─────────────────── */
     heap_init(kernel_heap_area, HEAP_SIZE);
 
-    /* ── 7. Paging / VMM ─────────────────────────────────────────────────────── */
-    paging_init();   /* inherits CR3 from boot.asm — safe, no teardown */
+    /* ── 7. Paging — inherits boot.asm CR3, no page-table teardown ────────── */
+    paging_init();
     vmm_init();
 
-    /* ── 8. PIT timer at 1000 Hz ─────────────────────────────────────────────── */
+    /* ── 8. PIT timer at 1000 Hz ──────────────────────────────────────────── */
     timer_init(1000);
 
-    /* ── 9. PS/2 keyboard ────────────────────────────────────────────────────── */
+    /* ── 9. PS/2 keyboard ─────────────────────────────────────────────────── */
     keyboard_init();
 
-    /* ── 10. ATA PIO disk driver ─────────────────────────────────────────────── */
+    /* ── 10. ATA PIO disk driver ──────────────────────────────────────────── */
     ata_init();
 
-    /* ── 11. PCI bus enumeration ─────────────────────────────────────────────── */
+    /* ── 11. PCI bus enumeration ──────────────────────────────────────────── */
     pci_init();
 
-    /* ── 12. CMOS Real-Time Clock ────────────────────────────────────────────── */
+    /* ── 12. CMOS Real-Time Clock ─────────────────────────────────────────── */
     rtc_init();
 
-    /* ── 13. Network stub ────────────────────────────────────────────────────── */
+    /* ── 13. Network stub ─────────────────────────────────────────────────── */
     net_init();
 
-    /* ── 14. VFS + ramfs ─────────────────────────────────────────────────────── */
+    /* ── 14. VFS + ramfs ──────────────────────────────────────────────────── */
     vfs_init();
     vfs_node_t *ramfs_root = ramfs_create_root();
     if (ramfs_root) {
@@ -217,19 +279,15 @@ void kernel_main(uint32_t mb2_magic, mb2_info_t *mb2_info) {
         klog(LOG_ERROR, "Failed to create ramfs root");
     }
 
-    /* ── 15. Process table, scheduler, syscall gate ──────────────────────────── */
+    /* ── 15. Process table, scheduler, syscall gate ───────────────────────── */
     proc_init();
     scheduler_init();
     syscall_init();
 
-    klog(LOG_INFO, "PMM: %llu MB free of %llu MB total",
-         pmm_get_free_memory() / (1024*1024),
-         pmm_get_total_memory() / (1024*1024));
-
-    /* ── 16. /proc filesystem (needs heap + process table) ───────────────────── */
+    /* ── 16. /proc filesystem (needs heap + process table) ────────────────── */
     procfs_init();
 
-    /* ── 17. Create init process (PID 1) and drop to ring 3 ─────────────────── */
+    /* ── 17. Create init process (PID 1) and drop to ring 3 ──────────────── */
     klog(LOG_INFO, "Launching init process (PID 1)...");
     process_t *init = proc_create("init", init_main, 9);
     if (!init) {
@@ -240,7 +298,7 @@ void kernel_main(uint32_t mb2_magic, mb2_info_t *mb2_info) {
 
     /*
      * Drop to ring 3 — one-way IRET.
-     * init_main will start nsh which loops forever.
+     * init_main starts nsh which loops forever reading user input.
      */
     proc_enter_ring3(init);
 

@@ -1,0 +1,70 @@
+NexOS boots successfully — all 18 subsystems initialize — but 
+crashes at the very last step with:
+
+  [ERROR] PMM: out of physical memory!
+  [ERROR] Failed to create init process
+
+The boot log shows: PMM: 0 MB free of 256 MB total
+
+This means by the time init process creation is attempted, the 
+PMM bitmap reports zero free pages despite having 256MB of RAM.
+
+Please read kernel/mm/pmm.c, kernel/mm/heap.c, kernel/mm/vmm.c, 
+and kernel/mm/paging.c in full, then fix all of the following:
+
+════════════════════════════════════════
+FIX 1 — PMM: Don't over-mark pages as used
+════════════════════════════════════════
+The most common cause of this bug is pmm_init() marking ALL 
+memory as used/reserved first (memset bitmap to 0xFF), then 
+only freeing regions the Multiboot2 map marks as "available" 
+— but if something later calls pmm_alloc_frame() for every 
+page table entry during VMM/paging init WITHOUT calling 
+pmm_free_frame() for pages that are reused, the free count 
+hits zero.
+
+Fix pmm_init() to:
+a) Start by marking ALL frames as used (0xFF fill is correct)
+b) Then iterate the Multiboot2 memory map and mark ONLY 
+   type=1 (available) regions as free
+c) Then re-mark as used: 
+   - The first 1MB (0x000000–0x100000) — BIOS/legacy
+   - The kernel image itself (use linker symbols 
+     kernel_start and kernel_end from linker.ld)
+   - The PMM bitmap itself
+   - The initial page tables from boot.asm 
+     (boot_pml4, boot_pdpt, boot_pd — first 3 pages after kernel)
+   - The kernel heap region (0x118000 to 0x118000 + 2MB)
+d) Add a pmm_get_free_frames() function that returns the 
+   current count of free frames, and log it at INFO level 
+   after pmm_init() completes, like:
+   [INFO] PMM: X MB free of Y MB total (Z frames free)
+
+════════════════════════════════════════
+FIX 2 — VMM/Paging: Don't allocate new frames for 
+         already-identity-mapped pages
+════════════════════════════════════════
+When paging_init() or vmm_init() sets up additional mappings, 
+every call to vmm_map_page() that allocates a new page table 
+via pmm_alloc_frame() consumes a physical frame permanently.
+
+Fix vmm_map_page() to:
+a) Before calling pmm_alloc_frame() for a new page table, 
+   check if the entry already exists (present bit set). If 
+   it does, reuse it — do NOT allocate a new frame.
+b) Only call pmm_alloc_frame() when a page table entry is 
+   genuinely absent (present bit = 0).
+c) After allocating a new page table frame, zero it with 
+   memset before use — uninitialized page tables cause 
+   random mappings.
+
+════════════════════════════════════════
+FIX 3 — Init process: Reduce initial memory footprint
+════════════════════════════════════════
+Read kernel/proc/process.c and find where the init process 
+is created. Fix process creation to:
+
+a) Allocate only ONE page (4KB) for the initial kernel stack 
+   instead of multiple pages
+b) For the process page directory: reuse the kernel's existing 
+   PML4

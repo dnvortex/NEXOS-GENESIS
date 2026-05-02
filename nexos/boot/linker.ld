@@ -6,6 +6,9 @@ SECTIONS
 {
     . = 0x100000;
 
+    /* Exported to C so the PMM can precisely reserve the kernel image */
+    kernel_start = .;
+
     .boot :
     {
         KEEP(*(.multiboot2))
@@ -31,6 +34,10 @@ SECTIONS
         *(COMMON)
         *(.bss*)
     }
+
+    /* Page-aligned end — covers all code, data, BSS (heap, bitmap, stacks,
+       boot page tables).  The PMM uses this to avoid handing out kernel pages. */
+    kernel_end = ALIGN(4096);
 
     /DISCARD/ :
     {

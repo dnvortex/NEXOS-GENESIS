@@ -7,7 +7,7 @@
 
 #define MAX_PROCESSES   64
 #define MAX_FDS         16
-#define PROC_STACK_SIZE (8 * 1024)   /* 8 KB kernel stack per process */
+#define PROC_STACK_SIZE (4096)       /* 1 page (4 KB) kernel stack per process */
 #define MAX_ENV_VARS    64
 #define MAX_ENV_LEN     256
 
@@ -39,9 +39,9 @@ typedef struct process {
     uint8_t      *stack;
     uint64_t      stack_size;
 
-    /* User-mode stack (one physical page, identity-mapped for now) */
+    /* User-mode stack (one physical page, identity-mapped) */
     uint64_t      user_stack;      /* physical / virtual base */
-    uint64_t      user_stack_top;  /* top (= base + PAGE_SIZE)  */
+    uint64_t      user_stack_top;  /* top (= base + PAGE_SIZE) */
 
     uint64_t      cr3;
     vfs_node_t   *fds[MAX_FDS];
@@ -55,7 +55,7 @@ typedef struct process {
 
 void       proc_init(void);
 process_t *proc_create(const char *name, void (*entry)(void), uint8_t priority);
-void       proc_enter_ring3(process_t *proc);   /* IRET into ring 3 */
+void       proc_enter_ring3(process_t *proc);
 void       proc_exit(int code);
 process_t *proc_get_current(void);
 process_t *proc_get_by_pid(uint32_t pid);
