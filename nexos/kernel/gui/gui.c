@@ -164,10 +164,19 @@ void gui_main(void) {
         /* ── Frame render (~30 fps) ─────────────────────────────────────── */
         if (now - last_frame >= 33) {
             last_frame = now;
-            desktop_draw();
+
+            /* Only repaint the desktop gradient when something changed:
+               window open/close/minimize/maximize, drag end, or theme switch.
+               Skipping this every frame eliminates the full-screen flash that
+               caused the glitch — windows repaint themselves in-place fine. */
+            if (fb_scene_dirty) {
+                desktop_draw();
+                fb_scene_dirty = 0;
+            }
+
             wm_render_all();
             taskbar_draw();
-            launcher_draw();
+            if (launcher_is_visible()) launcher_draw();
             notif_draw();
             cursor_restore();
             cursor_draw(mx, my);

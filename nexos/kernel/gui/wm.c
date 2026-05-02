@@ -1,5 +1,6 @@
 /* NexOS — kernel/gui/wm.c | Window Manager | MIT License */
 #include "wm.h"
+#include "desktop.h"
 #include "../drivers/fb.h"
 #include "../drivers/font.h"
 #include "../mm/heap.h"
@@ -93,6 +94,7 @@ window_t *wm_new(int x, int y, int w, int h, const char *title) {
     wins[0] = win;
     win_count++;
     wm_focus(win);
+    fb_scene_dirty = 1;   /* new window exposes desktop — need full repaint */
     return win;
 }
 
@@ -100,6 +102,10 @@ void wm_close(window_t *win) {
     if (!win) return;
     for (int i = 0; i < win_count; i++) {
         if (wins[i] == win) {
+            /* paint desktop over the area this window occupied */
+            desktop_paint_rect(win->x - 2, win->y - 2,
+                               win->w + WM_SHADOW_OFF + 4,
+                               win->h + WM_SHADOW_OFF + 4);
             for (int j = i; j < win_count - 1; j++) wins[j] = wins[j + 1];
             wins[win_count - 1] = NULL;
             win_count--;
@@ -109,6 +115,7 @@ void wm_close(window_t *win) {
             }
             if (win->pixels) kfree(win->pixels);
             kfree(win);
+            fb_scene_dirty = 1;   /* redraw remaining windows over clean bg */
             return;
         }
     }
@@ -131,6 +138,10 @@ void wm_raise(window_t *win) {
 }
 
 void wm_minimize(window_t *win) {
+    /* paint desktop over the area this window occupied */
+    desktop_paint_rect(win->x - 2, win->y - 2,
+                       win->w + WM_SHADOW_OFF + 4,
+                       win->h + WM_SHADOW_OFF + 4);
     win->state = WIN_MINIMIZED;
     if (focused_win == win) {
         for (int i = 0; i < win_count; i++) {
@@ -139,6 +150,7 @@ void wm_minimize(window_t *win) {
             }
         }
     }
+    fb_scene_dirty = 1;   /* repaint remaining windows over clean bg */
 }
 
 void wm_toggle_maximize(window_t *win) {
@@ -151,9 +163,10 @@ void wm_toggle_maximize(window_t *win) {
         win->orig_w = win->w; win->orig_h = win->h;
         win->x = 0; win->y = 0;
         win->w = (int)fb.width;
-        win->h = (int)fb.height - 40; /* leave taskbar */
+        win->h = (int)fb.height - 40;
         win->state = WIN_MAXIMIZED;
     }
+    fb_scene_dirty = 1;   /* layout changed — full repaint */
 }
 
 void wm_move(window_t *win, int x, int y) { win->x = x; win->y = y; }
@@ -193,7 +206,14 @@ void wm_handle_mouse(int x, int y, int left, int right) {
             nx = (int)fb.width - focused_win->w;
         if (ny + focused_win->h > (int)fb.height - 40)
             ny = (int)fb.height - 40 - focused_win->h;
-        wm_move(focused_win, nx, ny);
+        if (nx != focused_win->x || ny != focused_win->y) {
+            /* surgically repaint desktop over the OLD window footprint
+               (shadow + border padding) before the window moves */
+            desktop_paint_rect(focused_win->x - 2, focused_win->y - 2,
+                               focused_win->w + WM_SHADOW_OFF + 6,
+                               focused_win->h + WM_SHADOW_OFF + 6);
+            wm_move(focused_win, nx, ny);
+        }
         return;
     }
 
@@ -244,7 +264,10 @@ void wm_handle_mouse(int x, int y, int left, int right) {
 
 void wm_handle_mouse_release(int x, int y) {
     (void)x; (void)y;
-    if (focused_win) focused_win->dragging = 0;
+    if (focused_win && focused_win->dragging) {
+        focused_win->dragging = 0;
+        fb_scene_dirty = 1;  /* one final full repaint to clean up any artifacts */
+    }
 }
 
 void wm_handle_key(char key) {

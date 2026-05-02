@@ -13,6 +13,10 @@ typedef struct {
 
 extern framebuffer_t fb;
 
+/* Set to 1 whenever the desktop background must be fully repainted.
+   Cleared by the GUI render loop after calling desktop_draw(). */
+extern int fb_scene_dirty;
+
 /* ── Theme-switchable colour palette (Catppuccin Mocha defaults) ── */
 extern uint32_t col_base;
 extern uint32_t col_mantle;

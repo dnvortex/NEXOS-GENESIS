@@ -77,7 +77,7 @@ void theme_apply(int id) {
     col_green    = th->green;
     col_teal     = th->teal;
     col_sky      = th->sky;
-    wm_render_all();
+    fb_scene_dirty = 1;   /* full repaint with new palette */
 }
 
 static void theme_paint(window_t *win) {

@@ -4,6 +4,10 @@
 
 framebuffer_t fb = {0};
 
+/* Dirty flag — set 1 to request a full desktop background repaint.
+   The GUI main loop clears it once desktop_draw() has been called. */
+int fb_scene_dirty = 1;
+
 /* ── Catppuccin Mocha defaults ─────────────────────────────────────────── */
 uint32_t col_base     = 0x1E1E2E;
 uint32_t col_mantle   = 0x181825;
