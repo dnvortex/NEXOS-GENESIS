@@ -41,9 +41,9 @@ static int ata_poll(void) {
 }
 
 void ata_init(void) {
-    uint16_t buf[256];
-
     for (int drive = 0; drive < 2; drive++) {
+        uint16_t buf[256];
+        (void)buf;
         /* Select drive */
         io_outb(ATA_DRIVE, (drive == 0) ? 0xA0 : 0xB0);
         ata_wait();
