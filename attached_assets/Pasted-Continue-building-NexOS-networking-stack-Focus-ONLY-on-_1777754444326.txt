@@ -1,0 +1,163 @@
+Continue building NexOS networking stack. Focus ONLY on achieving a working ICMP ping over an RTL8139 Ethernet device in QEMU. Do NOT implement TCP, DNS, or WiFi.
+
+════════════════════════════════════
+OBJECTIVE
+════════════════════════════════════
+
+By the end:
+
+* NexOS detects RTL8139 NIC
+* Retrieves its MAC address
+* Sends ARP request to gateway (10.0.2.2)
+* Receives ARP reply
+* Sends ICMP echo request (ping)
+* Receives ICMP echo reply
+* Logs all steps clearly
+
+════════════════════════════════════
+PHASE 1 — VERIFY RTL8139 DRIVER
+════════════════════════════════════
+
+Ensure:
+
+* PCI scan detects Vendor 0x10EC Device 0x8139
+* BAR0 is read correctly (I/O base)
+* Card reset works (CR register)
+* RX buffer allocated and aligned
+* MAC address read from registers
+
+Add logs:
+[INFO] RTL8139 detected
+[INFO] IO base: 0xXXXX
+[INFO] MAC: XX:XX:XX:XX:XX:XX
+
+If NIC not detected, stop and log error.
+
+════════════════════════════════════
+PHASE 2 — ETHERNET LAYER
+════════════════════════════════════
+
+Create ethernet.c/h:
+
+Define struct:
+
+* dest_mac[6]
+* src_mac[6]
+* ethertype (big endian)
+* payload
+
+Implement:
+
+* ethernet_send(dest_mac, ethertype, payload, len)
+* ethernet_receive(frame)
+
+Supported types:
+
+* 0x0806 → ARP
+* 0x0800 → IPv4
+
+════════════════════════════════════
+PHASE 3 — ARP
+════════════════════════════════════
+
+Create arp.c:
+
+Implement:
+
+* arp_request(target_ip)
+* arp_reply(request)
+* arp_table (store IP → MAC)
+
+Behavior:
+
+* On boot, send ARP request to 10.0.2.2
+* On ARP reply, store MAC and log:
+
+[INFO] ARP resolved: 10.0.2.2 → XX:XX:XX:XX:XX:XX
+
+════════════════════════════════════
+PHASE 4 — IPv4
+════════════════════════════════════
+
+Create ip.c:
+
+Define IPv4 header:
+
+* version, ihl, total_length
+* src_ip, dest_ip
+* protocol
+* checksum
+
+Implement:
+
+* ip_send(dest_ip, protocol, payload)
+* ip_receive(packet)
+
+Ignore fragmentation.
+
+════════════════════════════════════
+PHASE 5 — ICMP (PING)
+════════════════════════════════════
+
+Create icmp.c:
+
+Implement:
+
+* ICMP echo request
+* ICMP echo reply handler
+
+Functions:
+
+* icmp_send_echo(dest_ip)
+* icmp_handle(packet)
+
+On receiving reply:
+[INFO] Ping reply received from 10.0.2.2
+
+════════════════════════════════════
+PHASE 6 — BOOT SEQUENCE HOOK
+════════════════════════════════════
+
+After network init in kernel_main():
+
+1. Initialize RTL8139
+2. Send ARP request to 10.0.2.2
+3. Wait for ARP resolution (with timeout)
+4. Send ICMP ping
+
+════════════════════════════════════
+PHASE 7 — QEMU CONFIG
+════════════════════════════════════
+
+Ensure run_qemu.sh includes:
+
+qemu-system-x86_64 
+-cdrom nexos.iso 
+-hda nexos.img 
+-m 256M 
+-serial stdio 
+-netdev user,id=net0 
+-device rtl8139,netdev=net0
+
+════════════════════════════════════
+EXPECTED OUTPUT
+════════════════════════════════════
+
+[INFO] RTL8139 initialized
+[INFO] MAC: XX:XX:XX:XX:XX:XX
+[INFO] Sending ARP request...
+[INFO] ARP resolved: 10.0.2.2 → XX:XX:XX:XX:XX:XX
+[INFO] Sending ping...
+[INFO] Ping reply received
+
+════════════════════════════════════
+RULES
+════════════════════════════════════
+
+* Build step-by-step
+* Test each phase before moving on
+* Log EVERYTHING clearly
+* Do NOT proceed if a phase fails
+* Do NOT implement extra features
+
+Start with PHASE 1.

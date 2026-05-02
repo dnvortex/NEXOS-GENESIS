@@ -14,7 +14,7 @@ void ethernet_init(void) {
     rtl8139_get_mac(eth_our_mac);
     rtl8139_set_rx_callback(ethernet_receive);
     klog(LOG_INFO,
-         "Ethernet: MAC=%02x:%02x:%02x:%02x:%02x:%02x IP=10.0.2.15 GW=10.0.2.2",
+         "MAC: %02x:%02x:%02x:%02x:%02x:%02x",
          eth_our_mac[0], eth_our_mac[1], eth_our_mac[2],
          eth_our_mac[3], eth_our_mac[4], eth_our_mac[5]);
 }

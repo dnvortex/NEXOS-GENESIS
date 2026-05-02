@@ -155,6 +155,7 @@ int rtl8139_init(void) {
     rtl_detected = 1;
     klog(LOG_INFO, "RTL8139: RX/TX enabled, RX buf at 0x%x (%u KB)",
          (uint32_t)(uintptr_t)rtl_rx_buf, RTL_RX_BUF_SIZE / 1024);
+    klog(LOG_INFO, "RTL8139 initialized");
     return 1;
 }
 
