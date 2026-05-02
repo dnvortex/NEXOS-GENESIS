@@ -1,0 +1,114 @@
+NexOS is crashing before the kernel's serial or VGA output 
+initializes. The serial debug file only contains "[" meaning 
+execution stops in the very earliest boot stage — either in 
+boot.asm before calling kernel_main, or during the transition 
+to 64-bit long mode.
+
+Please audit and fix the following:
+
+════════════════════════════════════════
+1. FIX boot.asm — MULTIBOOT2 + LONG MODE TRANSITION
+════════════════════════════════════════
+Check boot.asm for these common failure points and fix all of them:
+
+a) The Multiboot2 header magic, architecture, header_length, and 
+   checksum must be correct. Verify:
+   - magic:        dd 0xE85250D6
+   - architecture: dd 0           (i386)
+   - header_length: dd (end - start)
+   - checksum:     dd 0x100000000 - (0xE85250D6 + 0 + header_length)
+   The checksum must make all four fields sum to zero mod 2^32.
+
+b) Before entering long mode, the following must happen in order:
+   1. Disable interrupts (cli)
+   2. Verify A20 line is enabled (write to port 0x92, bit 1)
+   3. Load a valid GDT with a 64-bit code descriptor BEFORE 
+      switching to long mode — not after
+   4. Enable PAE: set bit 5 in CR4
+   5. Load PML4 address into CR3
+   6. Enable long mode: set EFER.LME (MSR 0xC0000080, bit 8)
+   7. Enable paging + protected mode: set CR0 bits 31 and 0
+   8. Far jump to 64-bit code segment to flush the pipeline:
+      jmp 0x08:long_mode_entry
+   9. In long_mode_entry: set up a proper 64-bit stack, set all 
+      segment registers (DS, ES, FS, GS, SS) to the data segment
+   10. Call kernel_main
+
+c) The initial page tables set up in boot.asm MUST identity map 
+   at minimum the first 4MB of physical memory so the kernel 
+   code is accessible after paging is enabled. Use 2MB huge 
+   pages (PDE with bit 7 set) for simplicity:
+   - PML4[0] → PDPT
+   - PDPT[0] → PD
+   - PD[0] → 0x000000 (2MB, huge page, present+writable)
+   - PD[1] → 0x200000 (2MB, huge page, present+writable)
+
+d) The stack must be 16-byte aligned before calling kernel_main
+   and must be at least 16KB in size. Define it in BSS:
+   stack_bottom:
+     resb 16384
+   stack_top:
+   Then: mov rsp, stack_top
+
+e) Write a direct VGA test BEFORE calling kernel_main to confirm 
+   execution reaches this point:
+     mov rax, 0xB8000
+     mov word [rax], 0x0F4F   ; 'O' white on black = "OK"
+     mov word [rax+2], 0x0F4B ; 'K'
+
+════════════════════════════════════════
+2. FIX paging.c — SAFE EARLY PAGING
+════════════════════════════════════════
+The early page tables in boot.asm must be completely separate 
+from what paging.c sets up later. paging.c should NOT tear down 
+the identity map before establishing a new one. Fix paging.c so:
+
+a) It only ADDS new mappings on top of existing ones rather than 
+   replacing CR3 with a new empty PML4
+b) It never unmaps the first 4MB identity map until after the 
+   kernel heap and PMM are fully running
+c) Any CR3 reload must use AT&T syntax in GCC inline asm:
+   asm volatile("mov %0, %%cr3" :: "r"(addr) : "memory");
+
+════════════════════════════════════════
+3. FIX kernel.c — SAFE INIT ORDER
+════════════════════════════════════════
+In kernel_main(), add a direct VGA write as the very first line 
+before calling any init function:
+
+  volatile uint16_t* vga = (volatile uint16_t*)0xB8000;
+  vga[0] = 0x0F4B;  // 'K'
+  vga[1] = 0x0F4D;  // 'M'
+  vga[2] = 0x0F41;  // 'A'
+  vga[3] = 0x0F49;  // 'I'
+  vga[4] = 0x0F4E;  // 'N'
+
+Then initialize subsystems in this exact safe order:
+  1. vga_init()      — must come first, screen output
+  2. serial_init()   — debug output
+  3. gdt_init()
+  4. idt_init()
+  5. pmm_init(mbi)   — pass multiboot info pointer
+  6. heap_init()
+  7. paging_init()   — only AFTER heap is ready
+  8. timer_init()
+  9. keyboard_init()
+  10. ata_init()
+  11. pci_init()
+  12. rtc_init()
+  13. vfs_init()
+  14. ramfs_init()
+  15. fat32_init()
+  16. proc_init()
+  17. sched_init()
+  18. launch init process
+
+════════════════════════════════════════
+4. REBUILD AND VERIFY
+════════════════════════════════════════
+After all fixes:
+1. Run make clean && make all
+2. Show the full build output
+3. Confirm nexos.iso is rebuilt
+4. Show the complete final boot.asm file so I can verify it
+5. Show the complete final kernel.c file so I can verify it
