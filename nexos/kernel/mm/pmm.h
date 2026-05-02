@@ -12,5 +12,6 @@ void     pmm_free_page(uint64_t addr);
 uint64_t pmm_get_free_memory(void);
 uint64_t pmm_get_total_memory(void);
 uint64_t pmm_get_free_frames(void);
+void     pmm_print_map(void);   /* log memory map to serial */
 
 #endif

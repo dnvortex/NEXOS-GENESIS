@@ -23,11 +23,11 @@ KERNEL_ELF = $(BUILD)/nexos.kernel
 ISO_FILE   = $(BUILD)/nexos.iso
 
 CFLAGS = -std=c11 -ffreestanding -fno-stack-protector -fno-pic \
-         -mno-red-zone -mno-mmx -mno-sse -mno-sse2 \
-         -Wall -Wextra -O2 -m64 -mcmodel=kernel \
-         -nostdlib -nostdinc \
-         -I$(ROOT) -I$(KERNEL) -I$(KERNEL)/include \
-         -Wno-unused-parameter -Wno-unused-variable
+	 -mno-red-zone -mno-mmx -mno-sse -mno-sse2 \
+	 -Wall -Wextra -O2 -m64 -mcmodel=kernel \
+	 -nostdlib -nostdinc \
+	 -I$(ROOT) -I$(KERNEL) -I$(KERNEL)/include \
+	 -Wno-unused-parameter -Wno-unused-variable
 
 ASFLAGS = -f elf64
 
@@ -45,6 +45,7 @@ KERNEL_C_SOURCES = \
     $(KERNEL)/drivers/timer.c \
     $(KERNEL)/drivers/ata.c \
     $(KERNEL)/drivers/pci.c \
+    $(KERNEL)/drivers/rtl8139.c \
     $(KERNEL)/drivers/rtc.c \
     $(KERNEL)/mm/pmm.c \
     $(KERNEL)/mm/heap.c \
@@ -72,7 +73,9 @@ KERNEL_ASM_OBJS = $(patsubst %.asm, $(BUILD)/%.asm.o, $(KERNEL_ASM_SOURCES))
 ALL_OBJS        = $(KERNEL_ASM_OBJS) $(KERNEL_C_OBJS)
 
 # ---- Targets ----
-.PHONY: all kernel iso clean run run-debug install-usb check
+DISK_IMG = $(BUILD)/nexos_disk.img
+
+.PHONY: all kernel iso clean run run-debug run-with-disk disk install-usb check
 
 all: kernel iso
 
@@ -89,6 +92,15 @@ run: iso
 run-debug: iso
 	@chmod +x $(TOOLS)/run_qemu_debug.sh
 	@$(TOOLS)/run_qemu_debug.sh
+
+disk:
+	@mkdir -p $(BUILD)
+	@chmod +x $(TOOLS)/create_disk.sh
+	@$(TOOLS)/create_disk.sh
+
+run-with-disk: iso disk
+	@chmod +x $(TOOLS)/run_qemu.sh
+	@NEXOS_USE_DISK=1 $(TOOLS)/run_qemu.sh
 
 install-usb: iso
 	@$(PYTHON) $(TOOLS)/install_usb.py

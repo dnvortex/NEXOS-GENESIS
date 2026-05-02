@@ -284,10 +284,32 @@ vfs_node_t *fat32_mount(int drive, uint32_t lba_start) {
     /* Access BPB fields through a pointer — no copy, no stack overflow */
     fat32_bpb_t *bpb = (fat32_bpb_t *)sector_buf;
 
-    /* Validate key BPB fields: a zeroed or garbage sector means no FAT32 */
-    if (bpb->bytes_per_sector == 0 || bpb->sectors_per_cluster == 0 ||
-        bpb->fat_size_32 == 0    || bpb->root_cluster < 2) {
-        klog(LOG_WARN, "FAT32: drive %d BPB invalid (no FAT32 or no disk)", drive);
+    /* Check MBR/VBR boot signature at bytes 510-511 */
+    uint8_t sig0 = sector_buf[510], sig1 = sector_buf[511];
+    int sig_ok  = (sig0 == 0x55 && sig1 == 0xAA);
+
+    /* Log BPB fields at INFO level for diagnostics */
+    klog(LOG_INFO,
+         "FAT32: drive %d BPB: sig=%02x%02x bps=%u spc=%u fatcnt=%u "
+         "fatsize=%u rootclus=%u",
+         drive, sig0, sig1,
+         bpb->bytes_per_sector, bpb->sectors_per_cluster,
+         bpb->fat_count, bpb->fat_size_32, bpb->root_cluster);
+
+    /* Validate: need valid boot signature AND sane geometry */
+    int bps_ok  = (bpb->bytes_per_sector == 512);
+    int fats_ok = (bpb->fat_count >= 1);
+    if (!sig_ok || !bps_ok || !fats_ok ||
+        bpb->sectors_per_cluster == 0 ||
+        bpb->fat_size_32 == 0 || bpb->root_cluster < 2) {
+        klog(LOG_WARN,
+             "FAT32: drive %d: not a valid FAT32 volume "
+             "(sig=%s bps=%s fats=%s spc=%u fsz=%u rc=%u)",
+             drive,
+             sig_ok  ? "ok" : "bad",
+             bps_ok  ? "ok" : "bad",
+             fats_ok ? "ok" : "bad",
+             bpb->sectors_per_cluster, bpb->fat_size_32, bpb->root_cluster);
         kfree(sector_buf); sector_buf = NULL;
         return NULL;
     }

@@ -1,0 +1,290 @@
+NexOS is fully working — shell prompt is live, all 18 subsystems 
+boot cleanly, heap is healthy at 8177KB, ramfs is running. 
+
+Now implement the following next-phase features in order. Read 
+all relevant existing files before modifying anything. Build and 
+verify after each phase before moving to the next.
+
+════════════════════════════════════════════════════════
+PHASE 1 — VIRTUAL DISK (FAT32 on VDI)
+════════════════════════════════════════════════════════
+
+Goal: Create a virtual disk image that VirtualBox can attach 
+as a hard drive, pre-formatted as FAT32, so NexOS auto-mounts 
+it at /mnt/disk on boot and the shell can read/write files 
+that persist across reboots.
+
+1A — Create disk image build script
+Create tools/create_disk.sh:
+
+  #!/bin/bash
+  # Creates a 64MB FAT32 disk image for NexOS
+  set -e
+  IMG=build/nexos_disk.img
+  MOUNT=/tmp/nexos_disk_mount
+  
+  echo "[*] Creating 64MB disk image..."
+  dd if=/dev/zero of=$IMG bs=1M count=64
+  
+  echo "[*] Formatting as FAT32..."
+  mkfs.fat -F 32 -n "NEXOS" $IMG
+  
+  echo "[*] Mounting and populating..."
+  mkdir -p $MOUNT
+  sudo mount -o loop $IMG $MOUNT
+  
+  mkdir -p $MOUNT/home/user
+  mkdir -p $MOUNT/var/log
+  mkdir -p $MOUNT/tmp
+  echo "NexOS persistent disk" > $MOUNT/README.txt
+  echo "hostname=nexos" > $MOUNT/nexos.conf
+  
+  sudo umount $MOUNT
+  rmdir $MOUNT
+  echo "[*] Done: $IMG ($(du -h $IMG | cut -f1))"
+
+1B — Add make disk target to Makefile:
+  disk:
+      bash tools/create_disk.sh
+
+  run-with-disk:
+      make iso
+      make disk
+      $(QEMU) -cdrom build/nexos.iso \
+              -hda build/nexos_disk.img \
+              -m 512 -serial stdio \
+              -vga std -enable-kvm 2>/dev/null || \
+      $(QEMU) -cdrom build/nexos.iso \
+              -hda build/nexos_disk.img \
+              -m 512 -serial stdio -vga std
+
+1C — Fix FAT32 BPB detection in kernel/fs/fat32.c
+The current fat32_mount() fails with "BPB invalid" because 
+it only checks the boot signature (0x55AA) but not the OEM 
+string or cluster count. Fix fat32_mount() validation:
+
+  a) Read sector 0 from the ATA drive into a 512-byte buffer
+  b) Check bytes 510-511 == 0x55, 0xAA (boot signature)
+  c) Read the BPB:
+     - bytes_per_sector at offset 11 (must be 512)
+     - sectors_per_cluster at offset 13 (must be power of 2)
+     - num_fats at offset 16 (must be 1 or 2)
+     - total_sectors_32 at offset 32
+     - fat_size_32 at offset 36
+     - root_cluster at offset 44
+  d) Verify: bytes_per_sector == 512 AND num_fats >= 1
+  e) Log each field at DEBUG level so we can see what's read:
+     klog(DEBUG, "FAT32 BPB: bps=%d spc=%d nfats=%d",
+          bpb->bytes_per_sector,
+          bpb->sectors_per_cluster,
+          bpb->num_fats);
+  f) Only return error if signature AND bps AND num_fats all fail
+
+1D — In userspace/init/init.c, improve try_mount_disk():
+  - Try Primary Master (drive 0) first
+  - If BPB invalid, log the exact fields read and try 
+    Primary Slave (drive 1) as fallback
+  - If both fail, log WARN and continue with ramfs only
+  - If mount succeeds, log all mounted paths
+
+1E — In tools/run_qemu.sh, update to include the disk:
+  Add: -hda build/nexos_disk.img \
+  (only if the file exists: [ -f build/nexos_disk.img ])
+
+════════════════════════════════════════════════════════
+PHASE 2 — NEW SHELL COMMANDS (12 additions to nsh)
+════════════════════════════════════════════════════════
+
+Read userspace/shell/nsh.c in full before adding commands.
+Add these 12 new built-in commands:
+
+2A — hexdump [file]
+  Read the file in binary mode, print 16 bytes per line:
+  Format: "0000000: 48 65 6c 6c 6f 00 00 00  Hello..."
+  Show offset (8 hex digits), hex bytes, ASCII sidebar.
+  Non-printable bytes shown as '.' in ASCII column.
+  Limit output to first 512 bytes to avoid flooding terminal.
+
+2B — wc [file]
+  Count and print: lines, words, bytes in the file.
+  Format: "  42  156  1024 /path/to/file"
+
+2C — head [file] [n]
+  Print first n lines of file (default n=10).
+
+2D — tail [file] [n]
+  Print last n lines of file (default n=10).
+  Read whole file, then print from (total_lines - n) onward.
+
+2E — find [path] [name]
+  Recursively list all files under path.
+  If name is given, only print entries matching that name.
+  Format: "/home/user/test.txt"
+  Limit depth to 8 levels to prevent infinite loops.
+
+2F — top
+  Show a live process list refreshed every 2 seconds.
+  Display: PID, state, name, stack address.
+  After 5 refreshes, return to prompt.
+  Use timer_sleep_ms(2000) between refreshes.
+  Clear screen with vga_clear() between each refresh.
+
+2G — history
+  Print the last 50 commands from the history buffer,
+  numbered: "  1  ls /etc"
+
+2H — which [command]
+  Check if the named command is a built-in.
+  Print: "nsh: which: [cmd] is a shell built-in"
+  Or: "nsh: which: [cmd] not found"
+
+2I — stat [file]
+  Show file metadata: name, type (file/dir), size in bytes.
+  Use vfs_stat() and print the result fields.
+
+2J — tree [path]
+  Print directory tree with ASCII art:
+  /
+  ├── etc
+  │   ├── motd
+  │   └── nexos.conf
+  └── home
+      └── user
+  Limit depth to 4 levels.
+
+2K — memmap
+  Print the physical memory layout known to the PMM:
+  "  0x00000000 - 0x000FFFFF  [reserved]  1 MB"
+  "  0x00100000 - 0x10FFFFFF  [kernel]    16 MB"
+  "  0x01200000 - 0x019FFFFF  [heap]      8 MB"
+  "  0x01A00000 - 0x0FFFFFFF  [free]      230 MB"
+  Read from PMM bitmap to determine which regions are used.
+  Add a pmm_print_map(void) function to pmm.c that nsh calls.
+
+2L — ver
+  Print detailed version info:
+  "NexOS 0.1 (kernel) built [date]"
+  "  Arch:   x86_64"
+  "  Heap:   8MB at 0x1200000"
+  "  Uptime: [seconds]s"
+  "  Free:   [KB] KB RAM free"
+
+════════════════════════════════════════════════════════
+PHASE 3 — NETWORKING (RTL8139 driver)
+════════════════════════════════════════════════════════
+
+Goal: Detect and initialize an RTL8139 network card in QEMU 
+(-netdev user,id=n0 -device rtl8139,netdev=n0) and implement 
+enough to send/receive raw Ethernet frames.
+
+3A — RTL8139 PCI detection (kernel/drivers/rtl8139.c)
+Create kernel/drivers/rtl8139.c and kernel/drivers/rtl8139.h
+
+  RTL8139 identifiers:
+    Vendor ID: 0x10EC
+    Device ID: 0x8139
+
+  In rtl8139_init():
+    a) Scan the PCI device list (already built by pci_init())
+       for vendor=0x10EC device=0x8139
+    b) If not found, log INFO "RTL8139: not found" and return 0
+    c) If found, read the BAR0 (I/O base address) from PCI 
+       config space
+    d) Enable PCI bus mastering (set bit 2 in Command register)
+    e) Power on: write 0x00 to CONFIG_1 register (offset 0x52)
+    f) Software reset: write 0x10 to CMD register (offset 0x37)
+       Poll until bit 4 clears (reset complete), timeout 1000ms
+    g) Read MAC address from registers 0x00-0x05:
+       uint8_t mac[6];
+       for (int i=0; i<6; i++) mac[i] = inb(iobase + i);
+    h) Log: "[INFO] RTL8139: found at PCI, MAC=XX:XX:XX:XX:XX:XX"
+
+3B — Receive buffers
+    a) Allocate a 32KB + 16 byte receive ring buffer using kmalloc
+    b) Write physical address to RBSTART register (offset 0x30)
+    c) Set IMR (offset 0x3C) = 0x0005 (ROK + TOK interrupts)
+    d) Set RCR (offset 0x44) = 0xF | (1<<7)  (accept all, wrap)
+    e) Enable RX+TX: write 0x0C to CMD register (offset 0x37)
+
+3C — Transmit function
+  int rtl8139_send(uint8_t *data, uint16_t len):
+    a) Use one of 4 TX descriptors (rotate with tx_slot % 4)
+    b) Copy data to tx_buffer[slot] (each 2KB)
+    c) Write physical address to TSAD[slot] (offset 0x20+slot*4)
+    d) Write len to TSD[slot] (offset 0x10+slot*4) with bit 13 
+       clear (starts transmit)
+    e) Poll TSD[slot] bit 15 (TOK) for completion, timeout 100ms
+    f) Return 0 on success, -1 on timeout
+
+3D — IRQ handler
+    a) Install RTL8139 on IRQ 11 (typical for PCI slot in QEMU)
+       or read the interrupt line from PCI config offset 0x3C
+    b) In IRQ handler: read ISR register (offset 0x3E)
+    c) If ROK (bit 0): call rtl8139_receive() to drain RX buffer
+    d) If TOK (bit 2): mark last TX as complete
+    e) Write ISR value back to clear interrupts
+
+3E — Receive function
+  void rtl8139_receive():
+    a) Read CAPR register (offset 0x38) for current read pointer
+    b) Read CBR register (offset 0x3A) for current buffer pointer
+    c) While CAPR != CBR:
+       - Read 4-byte packet header at rx_buffer + CAPR
+       - Extract packet length from bits 16-31 of header
+       - Pass packet data to a rx_callback function pointer
+       - Advance CAPR by packet_length + 4, 4-byte aligned
+       - Write new CAPR to register
+
+3F — Simple ping handler (ARP reply)
+  Implement a basic ARP responder:
+    a) When a packet arrives, check EtherType (offset 12-13)
+    b) If EtherType == 0x0806 (ARP):
+       - Check ARP operation == 1 (request)
+       - Check target IP matches our IP (use 10.0.2.15 for QEMU NAT)
+       - Build ARP reply: swap src/dst MAC and IP, set op=2
+       - Call rtl8139_send() with the reply
+    c) Log: "RTL8139: ARP reply sent to X.X.X.X"
+
+3G — Shell command: ifconfig
+  Add to nsh.c:
+  "ifconfig" command prints:
+    "eth0: MAC=XX:XX:XX:XX:XX:XX  IP=10.0.2.15"
+    "      RX packets: N   TX packets: N"
+    "      Status: UP"
+
+3H — Shell command: ping [ip]
+  Add to nsh.c:
+  "ping [ip]" sends 4 ICMP echo requests:
+    - Build Ethernet + IP + ICMP headers manually
+    - IP: src=10.0.2.15, dst=[ip], proto=1 (ICMP)
+    - ICMP: type=8 (echo request), code=0, seq=1-4
+    - Compute IP and ICMP checksums
+    - Send via rtl8139_send()
+    - Wait 1 second for reply via rx callback
+    - Print: "64 bytes from [ip]: icmp_seq=1 time=Xms"
+    - Or: "Request timeout for icmp_seq=1"
+
+3I — QEMU networking flag
+  Update tools/run_qemu.sh to add:
+    -netdev user,id=n0 \
+    -device rtl8139,netdev=n0 \
+  So the network card is present when testing.
+
+3J — Call rtl8139_init() from kernel_main()
+  In kernel/kernel.c, after pci_init(), add:
+    rtl8139_init();
+  Add #include "drivers/rtl8139.h" at the top.
+
+════════════════════════════════════════════════════════
+PHASE 4 — USB INSTALLER (verify and improve)
+════════════════════════════════════════════════════════
+
+Read tools/install_usb.py in full.
+Improve it with these additions:
+
+4A — Windows support
+  The current script likely only handles Linux (/dev/sdX) 
+  and macOS (/dev/diskN). Add Windows support:
+    - Detect Windows via platform.system() == "Windows"
+    - On Windows, use PowerShell to list removable drives:
+        powershell "Get-Disk | Where BusType -eq USB |

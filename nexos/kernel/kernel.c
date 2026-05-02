@@ -17,6 +17,7 @@
 #include "fs/ramfs.h"
 #include "fs/procfs.h"
 #include "net/net.h"
+#include "drivers/rtl8139.h"
 #include "proc/process.h"
 #include "proc/scheduler.h"
 #include "proc/syscall.h"
@@ -278,8 +279,9 @@ void kernel_main(uint32_t mb2_magic, mb2_info_t *mb2_info) {
     /* ── 12. CMOS Real-Time Clock ─────────────────────────────────────────── */
     rtc_init();
 
-    /* ── 13. Network stub ─────────────────────────────────────────────────── */
+    /* ── 13. Network stub + RTL8139 ───────────────────────────────────────── */
     net_init();
+    rtl8139_init();
 
     /* ── 14. VFS + ramfs ──────────────────────────────────────────────────── */
     vfs_init();

@@ -119,3 +119,16 @@ void pmm_free_page(uint64_t addr) {
 uint64_t pmm_get_free_memory(void)  { return pmm_free_pages  * PAGE_SIZE; }
 uint64_t pmm_get_total_memory(void) { return pmm_total_pages * PAGE_SIZE; }
 uint64_t pmm_get_free_frames(void)  { return pmm_free_pages; }
+
+void pmm_print_map(void) {
+    uint64_t total = pmm_total_pages * PAGE_SIZE;
+    uint64_t free_ram = total > 0x01A00000 ? (total - 0x01A00000) >> 20 : 0;
+    klog(LOG_INFO, "PMM memory map:");
+    klog(LOG_INFO, "  0x00000000 - 0x000FFFFF  [BIOS/reserved]   1 MB");
+    klog(LOG_INFO, "  0x00100000 - 0x011FFFFF  [kernel+static]  17 MB");
+    klog(LOG_INFO, "  0x01200000 - 0x019FFFFF  [heap]            8 MB");
+    klog(LOG_INFO, "  0x01A00000 - 0x%08x  [free RAM]     %llu MB",
+         (uint32_t)(total - 1), free_ram);
+    klog(LOG_INFO, "  Free: %llu frames (%llu KB)",
+         pmm_free_pages, pmm_free_pages * (PAGE_SIZE / 1024));
+}

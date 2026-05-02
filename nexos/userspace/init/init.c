@@ -66,21 +66,31 @@ static void setup_dev(void) {
     klog(LOG_INFO, "init: /dev populated");
 }
 
-/* Returns 0 on success, -1 if no FAT32 disk found or mount failed.
+/* Returns 0 on success, -1 if no FAT32 disk found on either ATA drive.
+ * Tries primary master (drive 0) first, then primary slave (drive 1).
  * Failure is non-fatal: the shell still works with ramfs only. */
 static int try_mount_disk(void) {
-    klog(LOG_INFO, "init: attempting FAT32 mount on ATA master...");
-    vfs_node_t *fat_root = fat32_mount(ATA_PRIMARY_MASTER, 0);
-    if (!fat_root) {
-        klog(LOG_WARN, "init: no disk or FAT32 failed — running from ramfs only");
-        return -1;
+    static const int drives[] = { ATA_PRIMARY_MASTER, ATA_PRIMARY_SLAVE };
+    static const char *drive_names[] = { "primary master", "primary slave" };
+
+    for (int d = 0; d < 2; d++) {
+        klog(LOG_INFO, "init: trying FAT32 on ATA %s (drive %d)...",
+             drive_names[d], drives[d]);
+        vfs_node_t *fat_root = fat32_mount(drives[d], 0);
+        if (!fat_root) {
+            klog(LOG_INFO, "init: no FAT32 on drive %d", drives[d]);
+            continue;
+        }
+        if (vfs_mount("/mnt", fat_root) < 0) {
+            klog(LOG_WARN, "init: FAT32 mount point /mnt unavailable");
+            continue;
+        }
+        klog(LOG_INFO, "init: FAT32 mounted on drive %d at /mnt", drives[d]);
+        return 0;
     }
-    if (vfs_mount("/mnt", fat_root) < 0) {
-        klog(LOG_WARN, "init: FAT32 mount point /mnt not available");
-        return -1;
-    }
-    klog(LOG_INFO, "init: disk mounted at /mnt");
-    return 0;
+
+    klog(LOG_WARN, "init: no FAT32 disk found — running from ramfs only");
+    return -1;
 }
 
 static void reap_zombies(void) {
