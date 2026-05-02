@@ -3,6 +3,9 @@
 #include "../kernel.h"
 #include "../arch/x86_64/idt.h"
 
+void irq_install_handler(int irq, void (*handler)(registers_t *));
+void irq_uninstall_handler(int irq);
+
 #define PIT_CH0   0x40
 #define PIT_CMD   0x43
 #define PIT_BASE_HZ 1193182

@@ -33,6 +33,7 @@ static char *nsh_strcat(char *d, const char *s, size_t max) {
 }
 
 /* ---- VGA print helpers ---- */
+static void nsh_putchar(char c) { vga_putchar(c); }
 static void nsh_print(const char *s) { vga_puts(s); }
 static void nsh_println(const char *s) { vga_puts(s); vga_putchar('\n'); }
 
@@ -240,9 +241,6 @@ static int cmd_ls(int argc, char *argv[]) {
     }
     return 0;
 }
-
-/* nsh_putchar to avoid ambiguity with VGA */
-static void nsh_putchar(char c) { vga_putchar(c); }
 
 static int cmd_cd(int argc, char *argv[]) {
     char path[1024];

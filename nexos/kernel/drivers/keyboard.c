@@ -3,6 +3,9 @@
 #include "../kernel.h"
 #include "../arch/x86_64/idt.h"
 
+void irq_install_handler(int irq, void (*handler)(registers_t *));
+void irq_uninstall_handler(int irq);
+
 #define KBD_DATA 0x60
 #define KBD_STAT 0x64
 

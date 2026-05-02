@@ -29,7 +29,7 @@ CFLAGS = -std=c11 -ffreestanding -fno-stack-protector -fno-pic \
          -mno-red-zone -mno-mmx -mno-sse -mno-sse2 \
          -Wall -Wextra -O2 -m64 -mcmodel=kernel \
          -nostdlib -nostdinc \
-         -I$(ROOT) -I$(KERNEL) \
+         -I$(ROOT) -I$(KERNEL) -I$(KERNEL)/include \
          -Wno-unused-parameter -Wno-unused-variable
 
 ASFLAGS = -f elf64
@@ -80,43 +80,43 @@ all: kernel iso
 kernel: $(KERNEL_ELF)
 
 iso: kernel
-	@chmod +x $(TOOLS)/build_iso.sh
-	@$(TOOLS)/build_iso.sh
+        @chmod +x $(TOOLS)/build_iso.sh
+        @$(TOOLS)/build_iso.sh
 
 run: iso
-	@chmod +x $(TOOLS)/run_qemu.sh
-	@$(TOOLS)/run_qemu.sh
+        @chmod +x $(TOOLS)/run_qemu.sh
+        @$(TOOLS)/run_qemu.sh
 
 run-debug: iso
-	@chmod +x $(TOOLS)/run_qemu_debug.sh
-	@$(TOOLS)/run_qemu_debug.sh
+        @chmod +x $(TOOLS)/run_qemu_debug.sh
+        @$(TOOLS)/run_qemu_debug.sh
 
 install-usb: iso
-	@$(PYTHON) $(TOOLS)/install_usb.py
+        @$(PYTHON) $(TOOLS)/install_usb.py
 
 clean:
-	rm -rf $(BUILD)
+        rm -rf $(BUILD)
 
 # ---- Kernel ELF ----
 
 $(KERNEL_ELF): $(ALL_OBJS) $(BOOT)/linker.ld
-	@mkdir -p $(dir $@)
-	@echo "[LD] $@"
-	$(LD) $(LDFLAGS) -o $@ $(ALL_OBJS)
+        @mkdir -p $(dir $@)
+        @echo "[LD] $@"
+        $(LD) $(LDFLAGS) -o $@ $(ALL_OBJS)
 
 # ---- Compile C ----
 
 $(BUILD)/%.o: %.c
-	@mkdir -p $(dir $@)
-	@echo "[CC] $<"
-	$(CC) $(CFLAGS) -c $< -o $@
+        @mkdir -p $(dir $@)
+        @echo "[CC] $<"
+        $(CC) $(CFLAGS) -c $< -o $@
 
 # ---- Assemble ----
 
 $(BUILD)/%.asm.o: %.asm
-	@mkdir -p $(dir $@)
-	@echo "[ASM] $<"
-	$(ASM) $(ASFLAGS) $< -o $@
+        @mkdir -p $(dir $@)
+        @echo "[ASM] $<"
+        $(ASM) $(ASFLAGS) $< -o $@
 
 # ---- Dependencies ----
 
