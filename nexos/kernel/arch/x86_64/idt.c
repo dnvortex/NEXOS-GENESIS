@@ -59,27 +59,21 @@ void irq_uninstall_handler(int irq) {
 #define PIC_EOI   0x20
 
 static void pic_remap(void) {
-    /* Save masks */
     uint8_t m1 = io_inb(PIC1_DATA);
     uint8_t m2 = io_inb(PIC2_DATA);
 
-    /* Initialize in cascade mode */
     io_outb(PIC1_CMD,  0x11); io_wait();
     io_outb(PIC2_CMD,  0x11); io_wait();
 
-    /* Remap: IRQ0-7 → INT 32-39, IRQ8-15 → INT 40-47 */
     io_outb(PIC1_DATA, 0x20); io_wait();
     io_outb(PIC2_DATA, 0x28); io_wait();
 
-    /* Cascade setup */
     io_outb(PIC1_DATA, 0x04); io_wait();
     io_outb(PIC2_DATA, 0x02); io_wait();
 
-    /* 8086 mode */
     io_outb(PIC1_DATA, 0x01); io_wait();
     io_outb(PIC2_DATA, 0x01); io_wait();
 
-    /* Restore masks */
     io_outb(PIC1_DATA, m1);
     io_outb(PIC2_DATA, m2);
 }
@@ -101,9 +95,100 @@ static const char *exception_names[] = {
     "Security",                  "Reserved"
 };
 
+/* ── Page fault error code decoder ─────────────────────────────────────── */
+/*
+ * FIX 1: full page-fault diagnostics.
+ *
+ * Error code bit layout (Intel Vol 3A §4.7):
+ *   bit 0 (P)   — 0 = not-present page,  1 = protection violation
+ *   bit 1 (W/R) — 0 = read access,       1 = write access
+ *   bit 2 (U/S) — 0 = kernel mode,       1 = user mode
+ *   bit 3 (RSVD)— reserved bit in PTE was set
+ *   bit 4 (I/D) — 0 = data access,       1 = instruction fetch
+ */
+static void handle_page_fault(registers_t *regs) {
+    uint64_t cr2;
+    __asm__ volatile ("mov %%cr2, %0" : "=r"(cr2));
+
+    uint64_t err = regs->err_code;
+    int present   = (err >> 0) & 1;
+    int write     = (err >> 1) & 1;
+    int user_mode = (err >> 2) & 1;
+    int rsvd_set  = (err >> 3) & 1;
+    int ifetch    = (err >> 4) & 1;
+
+    /* --- Serial (always works even if VGA is corrupted) --- */
+    serial_printf("\n[PAGE FAULT]\n");
+    serial_printf("  CR2  = 0x%llx  (faulting virtual address)\n", cr2);
+    serial_printf("  RIP  = 0x%llx\n", regs->rip);
+    serial_printf("  CS   = 0x%llx  (ring %llu)\n",
+                  regs->cs, regs->cs & 3);
+    serial_printf("  RSP  = 0x%llx  SS=0x%llx\n",
+                  regs->rsp, regs->ss);
+    serial_printf("  RFLAGS = 0x%llx\n", regs->rflags);
+    serial_printf("  Error  = 0x%llx  [ %s | %s | %s%s%s]\n",
+                  err,
+                  present   ? "protection-violation" : "not-present",
+                  write     ? "write"                 : "read",
+                  user_mode ? "user-mode "            : "kernel-mode ",
+                  rsvd_set  ? "RSVD-bit "             : "",
+                  ifetch    ? "instr-fetch "           : "");
+    serial_printf("  RAX=0x%llx  RBX=0x%llx  RCX=0x%llx  RDX=0x%llx\n",
+                  regs->rax, regs->rbx, regs->rcx, regs->rdx);
+    serial_printf("  RSI=0x%llx  RDI=0x%llx  RBP=0x%llx\n",
+                  regs->rsi, regs->rdi, regs->rbp);
+
+    /* --- VGA (visible on screen) --- */
+    vga_set_color(VGA_COLOR_RED, VGA_COLOR_BLACK);
+    vga_puts("\n\n*** PAGE FAULT ***\n");
+
+    /* Print CR2 on VGA using the klog-style hex encoder directly
+       (klog itself calls timer_get_ticks which may be unsafe post-fault,
+       so we use serial + vga_puts with a pre-built string). */
+    static char hbuf[80];
+    /* Build "CR2=0x<hex>  err=0x<hex>" */
+    const char *hx = "0123456789abcdef";
+    int bi = 0;
+    hbuf[bi++]='C'; hbuf[bi++]='R'; hbuf[bi++]='2'; hbuf[bi++]='=';
+    hbuf[bi++]='0'; hbuf[bi++]='x';
+    for (int s = 60; s >= 0; s -= 4) hbuf[bi++] = hx[(cr2 >> s) & 0xF];
+    hbuf[bi++]=' '; hbuf[bi++]='e'; hbuf[bi++]='r'; hbuf[bi++]='r';
+    hbuf[bi++]='='; hbuf[bi++]='0'; hbuf[bi++]='x';
+    for (int s = 12; s >= 0; s -= 4) hbuf[bi++] = hx[(err >> s) & 0xF];
+    hbuf[bi++]='\n'; hbuf[bi] = 0;
+    vga_puts(hbuf);
+
+    /* Decode in plain English */
+    vga_puts(present   ? "  Cause:  protection violation\n"
+                       : "  Cause:  page not present\n");
+    vga_puts(write     ? "  Access: write\n" : "  Access: read\n");
+    vga_puts(user_mode ? "  Mode:   user\n"  : "  Mode:   kernel\n");
+
+    /* RIP */
+    bi = 0;
+    hbuf[bi++]='R'; hbuf[bi++]='I'; hbuf[bi++]='P'; hbuf[bi++]='=';
+    hbuf[bi++]='0'; hbuf[bi++]='x';
+    uint64_t rip = regs->rip;
+    for (int s = 60; s >= 0; s -= 4) hbuf[bi++] = hx[(rip >> s) & 0xF];
+    hbuf[bi++]='\n'; hbuf[bi] = 0;
+    vga_puts(hbuf);
+
+    vga_puts("System halted.\n");
+    vga_set_color(VGA_COLOR_LIGHT_GREY, VGA_COLOR_BLACK);
+}
+
+/* ── Main exception dispatcher ──────────────────────────────────────────── */
 void isr_handler(registers_t *regs) {
     uint64_t vec = regs->int_no;
 
+    /* Detailed per-exception handler for page fault */
+    if (vec == 14) {
+        handle_page_fault(regs);
+        cli();
+        for (;;) hlt();
+    }
+
+    /* Generic handler for all other CPU exceptions */
     serial_printf("[EXCEPTION] #%llu %s | err=0x%llx\n",
         vec,
         (vec < 32) ? exception_names[vec] : "Unknown",
@@ -122,6 +207,7 @@ void isr_handler(registers_t *regs) {
     vga_puts("\n\n*** KERNEL EXCEPTION ***\n");
     vga_puts(exception_names[vec < 32 ? vec : 0]);
     vga_puts(" — System Halted\n");
+    vga_set_color(VGA_COLOR_LIGHT_GREY, VGA_COLOR_BLACK);
 
     cli();
     for (;;) hlt();
@@ -134,7 +220,6 @@ void irq_handler(registers_t *regs) {
         irq_handlers[irq](regs);
     }
 
-    /* Send EOI */
     if (irq >= 8) io_outb(PIC2_CMD, PIC_EOI);
     io_outb(PIC1_CMD, PIC_EOI);
 }
@@ -143,7 +228,6 @@ void idt_init(void) {
     idtr.limit = sizeof(idt) - 1;
     idtr.base  = (uint64_t)&idt;
 
-    /* CPU exceptions 0-31 */
     idt_set_gate(0,  (uint64_t)isr0,  0x08, 0x8E);
     idt_set_gate(1,  (uint64_t)isr1,  0x08, 0x8E);
     idt_set_gate(2,  (uint64_t)isr2,  0x08, 0x8E);
@@ -177,7 +261,6 @@ void idt_init(void) {
     idt_set_gate(30, (uint64_t)isr30, 0x08, 0x8E);
     idt_set_gate(31, (uint64_t)isr31, 0x08, 0x8E);
 
-    /* IRQ handlers 32-47 */
     idt_set_gate(32, (uint64_t)irq0,  0x08, 0x8E);
     idt_set_gate(33, (uint64_t)irq1,  0x08, 0x8E);
     idt_set_gate(34, (uint64_t)irq2,  0x08, 0x8E);
@@ -195,9 +278,7 @@ void idt_init(void) {
     idt_set_gate(46, (uint64_t)irq14, 0x08, 0x8E);
     idt_set_gate(47, (uint64_t)irq15, 0x08, 0x8E);
 
-    /* Remap PIC */
     pic_remap();
-
     idt_flush((uint64_t)&idtr);
 
     klog(LOG_INFO, "IDT initialized (exceptions + IRQ0-15 remapped to INT 32-47)");

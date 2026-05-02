@@ -1,0 +1,143 @@
+NexOS now boots and creates the init process successfully but 
+crashes with a Page Fault immediately when dropping to ring 3:
+
+  [DEBUG] Created process 'init' pid=1 stack=0x11b1f0 user_stack=0x34b000
+  [INFO] Dropping to ring 3 → launching init (pid 1)
+  *** KERNEL EXCEPTION ***
+  Page Fault → System Halted
+
+The page fault happens because the init process entry point 
+address and/or user stack address are not mapped in the page 
+tables when ring 3 execution begins.
+
+Please read these files in full before making any changes:
+- kernel/arch/x86_64/enter_ring3.asm
+- kernel/proc/process.c
+- kernel/proc/scheduler.c  
+- kernel/arch/x86_64/isr.asm
+- kernel/arch/x86_64/paging.c
+- userspace/init/init.c
+
+Then apply ALL of the following fixes:
+
+════════════════════════════════════════
+FIX 1 — Page fault handler must print CR2 and error code
+════════════════════════════════════════
+In the page fault handler (ISR vector 14), print:
+  a) The faulting virtual address from CR2 register:
+     uint64_t cr2;
+     asm volatile("mov %%cr2, %0" : "=r"(cr2));
+     klog(ERROR, "Page fault at CR2=0x%x, error=0x%x", cr2, error_code);
+  b) The error code bits decoded:
+     - bit 0: 0=not present, 1=protection violation
+     - bit 1: 0=read, 1=write
+     - bit 2: 0=kernel, 1=user mode
+     Print: "Page fault: %s %s in %s mode"
+     with: present/not-present, read/write, kernel/user
+  c) Also print RIP at the time of fault if available
+  d) Then halt
+
+════════════════════════════════════════
+FIX 2 — Map init process entry point before ring 3 switch
+════════════════════════════════════════
+The init process entry point (the C function in 
+userspace/init/init.c) is a kernel-space address. When we 
+switch to ring 3 via IRET, the CPU checks that the target 
+address is mapped with user-accessible page table entries 
+(U/S bit = 1 in the PTE).
+
+Fix process.c where the init process is created:
+
+a) Get the physical address of the init function:
+   extern void init_main(void);  
+   uint64_t init_phys = (uint64_t)init_main; 
+   (since kernel is identity-mapped, virt == phys for now)
+
+b) Instead of running init in ring 3 with the actual ring-3 
+   IRET mechanism, change the approach entirely for now:
+   Run init as a kernel thread (ring 0) until the 
+   ring-3 infrastructure is more complete.
+
+   In process.c, when creating the init process:
+   - Set the saved CS to the KERNEL code segment (0x08) 
+     not the user code segment (0x1B)
+   - Set the saved SS to the KERNEL data segment (0x10) 
+     not the user data segment (0x23)  
+   - Set RFLAGS to 0x202 (interrupts enabled, ring 0)
+   - Set RSP to the kernel stack top (process->kernel_stack_top)
+   - Set RIP to the address of init_main
+
+   This runs init as a kernel-mode process which avoids 
+   ALL the ring-3 mapping issues. We can add proper ring-3 
+   later once the shell is working.
+
+c) In enter_ring3.asm or wherever the ring-3 switch happens,
+   add a guard: if CS saved in the process context is 0x08 
+   (kernel), do a normal RET-style jump instead of IRET to 
+   ring 3.
+
+════════════════════════════════════════
+FIX 3 — Init process: simplify to kernel thread
+════════════════════════════════════════
+Read userspace/init/init.c and verify init_main() is a 
+simple C function. It should:
+  a) Print "init: PID 1 started" via klog or direct vga_puts
+  b) Set up /etc, /dev, /tmp directories in ramfs
+  c) Write /etc/motd, /etc/hostname, /etc/nexos.conf
+  d) Launch nsh shell via a process_create() or exec() call
+  e) Loop waiting for children (zombie reaping)
+
+If init_main() uses any syscalls via INT 0x80 that require 
+ring-3, replace them temporarily with direct kernel function 
+calls (vfs_mkdir(), vfs_create(), vfs_write() etc.) since 
+init will run in ring 0 for now.
+
+════════════════════════════════════════
+FIX 4 — Scheduler: handle kernel thread context switch
+════════════════════════════════════════
+In scheduler.c, the context switch code likely does an 
+IRET assuming ring-3. Fix it to:
+
+a) Check the saved CS in the process context
+b) If CS == 0x08 (kernel code segment):
+   - Restore registers normally
+   - Jump to the saved RIP directly (not IRET with ring change)
+   - Keep the current kernel stack
+c) If CS == 0x1B (user code segment):
+   - Do full IRET with privilege level change as before
+
+════════════════════════════════════════
+FIX 5 — nsh shell: also run as kernel thread
+════════════════════════════════════════
+When init launches nsh, also create it as a kernel thread 
+(CS=0x08, SS=0x10, ring 0) using the same approach as Fix 2.
+The shell uses VGA/keyboard directly which works from ring 0.
+All VFS calls work from ring 0. This gets the shell 
+running immediately without needing ring-3 syscall plumbing.
+
+════════════════════════════════════════
+FIX 6 — Stack location fix
+════════════════════════════════════════
+The debug shows kernel stack at 0x11b1f0 which is very low 
+in memory and dangerously close to the kernel image.
+
+In process.c, allocate kernel stacks using kmalloc() so 
+they come from the heap (which starts at 0x118000 + heap 
+size) rather than from PMM direct allocation:
+
+  process->kernel_stack = (uint64_t)kmalloc(PROC_STACK_SIZE);
+  process->kernel_stack_top = process->kernel_stack + PROC_STACK_SIZE;
+  memset((void*)process->kernel_stack, 0, PROC_STACK_SIZE);
+
+════════════════════════════════════════
+AFTER ALL FIXES
+════════════════════════════════════════
+1. Run make clean && make all — zero errors required
+2. Confirm nexos.iso rebuilt
+3. Show the updated process.c create_init_process() function
+4. Show the updated scheduler context switch code
+5. Show what init_main() does step by step
+
+The goal is: NexOS boots → init runs as kernel thread → 
+init launches nsh as kernel thread → nsh shell prompt 
+appears → user can type commands.
