@@ -63,6 +63,10 @@ KERNEL_C_SOURCES = \
     $(KERNEL)/net/arp.c \
     $(KERNEL)/net/ip.c \
     $(KERNEL)/net/icmp.c \
+    $(KERNEL)/net/udp.c \
+    $(KERNEL)/net/dns.c \
+    $(KERNEL)/net/tcp.c \
+    $(KERNEL)/net/http.c \
     $(USER)/init/init.c \
     $(USER)/shell/nsh.c
 

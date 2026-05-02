@@ -1,0 +1,476 @@
+NexOS has an RTL8139 stub that detects the card but networking 
+is not functional. Implement a complete working network stack 
+from scratch. Read all existing files in kernel/net/ and 
+kernel/drivers/rtl8139.c before touching anything.
+
+════════════════════════════════════════
+PHASE 1 — RTL8139 DRIVER (complete it)
+════════════════════════════════════════
+
+Read kernel/drivers/rtl8139.c in full first.
+
+Fix and complete rtl8139_init():
+  a) Scan PCI list for vendor=0x10EC device=0x8139
+  b) Read BAR0 for I/O base address
+  c) Enable PCI bus mastering (PCI command register bit 2)
+  d) Power on: outb(iobase + 0x52, 0x00)
+  e) Software reset: outb(iobase + 0x37, 0x10)
+     Poll iobase+0x37 until bit 4 clears (max 1000 attempts)
+  f) Read MAC from registers 0x00-0x05
+  g) Allocate 32KB+16 RX ring buffer with kmalloc
+     Write physical address to RBSTART (iobase + 0x30)
+  h) Set IMR (iobase+0x3C) = 0x0005 (ROK+TOK)
+  i) Set RCR (iobase+0x44) = 0xF|(1<<7) (accept all+wrap)
+  j) Set TCR (iobase+0x40) = 0x03000700 (standard TX config)
+  k) Enable TX+RX: outb(iobase+0x37, 0x0C)
+  l) Read interrupt line from PCI config 0x3C
+     Install IRQ handler for that IRQ number
+  m) Log success: "[INFO] RTL8139: MAC=XX:XX:XX:XX:XX:XX ready"
+
+Implement TX (4 descriptor rotation):
+  static uint8_t tx_buf[4][2048];
+  static int tx_slot = 0;
+
+  int rtl8139_send(uint8_t *data, uint16_t len):
+    if (len > 2048) return -1;
+    int slot = tx_slot % 4;
+    memcpy(tx_buf[slot], data, len);
+    outl(iobase + 0x20 + slot*4, (uint32_t)tx_buf[slot]);
+    outl(iobase + 0x10 + slot*4, len & 0x1FFF);
+    // poll TOK bit (bit 15) max 10000 iterations
+    for (int i = 0; i < 10000; i++) {
+        if (inl(iobase + 0x10 + slot*4) & (1<<15)) break;
+    }
+    tx_slot++;
+    return 0;
+
+Implement RX (ring buffer drain):
+  static uint8_t *rx_buf;
+  static uint16_t rx_offset = 0;
+
+  void rtl8139_receive():
+    while ((inb(iobase+0x37) & 0x01) == 0) {
+        uint32_t *header = (uint32_t*)(rx_buf + rx_offset);
+        uint16_t pkt_len = (*header >> 16) & 0xFFFF;
+        if (pkt_len == 0 || pkt_len > 1792) break;
+        uint8_t *pkt = (uint8_t*)(rx_buf + rx_offset + 4);
+        ethernet_receive(pkt, pkt_len);
+        rx_offset = (rx_offset + pkt_len + 4 + 3) & ~3;
+        rx_offset %= 32768;
+        outw(iobase + 0x38, rx_offset - 16);
+    }
+
+IRQ handler:
+  void rtl8139_irq():
+    uint16_t isr = inw(iobase + 0x3E);
+    outw(iobase + 0x3E, isr);  // clear interrupts
+    if (isr & 0x01) rtl8139_receive();  // ROK
+    if (isr & 0x04) { /* TX ok */ }     // TOK
+
+════════════════════════════════════════
+PHASE 2 — ETHERNET LAYER
+════════════════════════════════════════
+
+Create kernel/net/ethernet.c and kernel/net/ethernet.h
+
+  typedef struct {
+      uint8_t  dst[6];
+      uint8_t  src[6];
+      uint16_t ethertype;  // big-endian
+      uint8_t  payload[];
+  } __attribute__((packed)) eth_frame_t;
+
+  #define ETHERTYPE_ARP  0x0806
+  #define ETHERTYPE_IP   0x0800
+
+  extern uint8_t my_mac[6];  // set by rtl8139_init
+
+  int ethernet_send(uint8_t *dst_mac, uint16_t ethertype,
+                    uint8_t *payload, uint16_t len):
+    - Allocate frame: sizeof(eth_frame_t) + len
+    - Fill dst, src (my_mac), ethertype (htons)
+    - Copy payload
+    - Call rtl8139_send(frame, total_len)
+    - Return 0 on success
+
+  void ethernet_receive(uint8_t *frame, uint16_t len):
+    - Cast to eth_frame_t
+    - Check ethertype:
+        0x0806 → arp_receive(frame->payload, len-14)
+        0x0800 → ip_receive(frame->payload, len-14)
+        else   → ignore
+
+  Helper: uint16_t htons(uint16_t x) { return (x>>8)|(x<<8); }
+          uint32_t htonl(uint32_t x) { /* byte swap 32 */ }
+
+════════════════════════════════════════
+PHASE 3 — ARP
+════════════════════════════════════════
+
+Create kernel/net/arp.c and kernel/net/arp.h
+
+  typedef struct {
+      uint16_t htype;   // hardware type (1=Ethernet)
+      uint16_t ptype;   // protocol type (0x0800=IP)
+      uint8_t  hlen;    // hardware addr len (6)
+      uint8_t  plen;    // protocol addr len (4)
+      uint16_t oper;    // 1=request, 2=reply
+      uint8_t  sha[6];  // sender MAC
+      uint8_t  spa[4];  // sender IP
+      uint8_t  tha[6];  // target MAC
+      uint8_t  tpa[4];  // target IP
+  } __attribute__((packed)) arp_packet_t;
+
+  // ARP cache: 16 entries
+  typedef struct { uint8_t ip[4]; uint8_t mac[6]; } arp_entry_t;
+  static arp_entry_t arp_cache[16];
+
+  void arp_receive(uint8_t *data, uint16_t len):
+    - Cast to arp_packet_t
+    - If oper==1 (request) and tpa==my_ip:
+        Build ARP reply: swap sha/tha, spa/tpa, set oper=2
+        ethernet_send(sha, ETHERTYPE_ARP, reply, sizeof(arp_packet_t))
+    - Cache sender: arp_cache_add(spa, sha)
+    - Log: "ARP: reply sent to X.X.X.X"
+
+  int arp_request(uint8_t *ip):
+    - Broadcast ARP request for ip
+    - dst_mac = FF:FF:FF:FF:FF:FF
+    - Wait up to 1000ms for reply (poll arp_cache)
+    - Return 0 if found, -1 if timeout
+
+  uint8_t *arp_lookup(uint8_t *ip):
+    - Search arp_cache for matching IP
+    - Return MAC pointer or NULL
+
+  void arp_cache_add(uint8_t *ip, uint8_t *mac):
+    - Add or update entry in arp_cache
+
+Our IP: 10.0.2.15 (QEMU NAT default)
+Gateway: 10.0.2.2
+
+════════════════════════════════════════
+PHASE 4 — IP LAYER
+════════════════════════════════════════
+
+Create kernel/net/ip.c and kernel/net/ip.h
+
+  typedef struct {
+      uint8_t  version_ihl;   // version=4, ihl=5
+      uint8_t  tos;
+      uint16_t total_length;
+      uint16_t id;
+      uint16_t flags_fragment;
+      uint8_t  ttl;           // 64
+      uint8_t  protocol;      // 1=ICMP, 6=TCP, 17=UDP
+      uint16_t checksum;
+      uint8_t  src[4];
+      uint8_t  dst[4];
+  } __attribute__((packed)) ip_header_t;
+
+  extern uint8_t my_ip[4];    // {10,0,2,15}
+  extern uint8_t gateway[4];  // {10,0,2,2}
+
+  uint16_t ip_checksum(void *data, int len):
+    - Standard one's complement checksum
+    uint32_t sum = 0;
+    uint16_t *p = data;
+    while (len > 1) { sum += *p++; len -= 2; }
+    if (len) sum += *(uint8_t*)p;
+    while (sum >> 16) sum = (sum&0xFFFF) + (sum>>16);
+    return ~sum;
+
+  int ip_send(uint8_t *dst_ip, uint8_t proto,
+              uint8_t *payload, uint16_t len):
+    - Build IP header (version=4, ihl=5, ttl=64)
+    - Set total_length = sizeof(ip_header_t) + len
+    - Compute checksum
+    - Resolve dst MAC via ARP (or use gateway MAC if not local)
+    - Call ethernet_send(dst_mac, ETHERTYPE_IP, packet, total)
+
+  void ip_receive(uint8_t *data, uint16_t len):
+    - Cast to ip_header_t
+    - Verify checksum
+    - Check dst IP matches my_ip
+    - Dispatch by protocol:
+        1  → icmp_receive(data + ihl*4, len - ihl*4, src)
+        17 → udp_receive(data + ihl*4, len - ihl*4, src)
+        6  → tcp_receive(data + ihl*4, len - ihl*4, src)
+
+════════════════════════════════════════
+PHASE 5 — ICMP (ping)
+════════════════════════════════════════
+
+Create kernel/net/icmp.c and kernel/net/icmp.h
+
+  typedef struct {
+      uint8_t  type;     // 8=request, 0=reply
+      uint8_t  code;     // 0
+      uint16_t checksum;
+      uint16_t id;
+      uint16_t seq;
+      uint8_t  data[56]; // 56 bytes padding
+  } __attribute__((packed)) icmp_packet_t;
+
+  void icmp_receive(uint8_t *data, uint16_t len, uint8_t *src):
+    icmp_packet_t *pkt = (icmp_packet_t*)data;
+    if (pkt->type == 8) {  // echo request → send reply
+        pkt->type = 0;
+        pkt->checksum = 0;
+        pkt->checksum = ip_checksum(pkt, len);
+        ip_send(src, 1, (uint8_t*)pkt, len);
+        klog(DEBUG, "ICMP: echo reply sent");
+    }
+    if (pkt->type == 0) {  // echo reply
+        icmp_got_reply = 1;
+        icmp_reply_seq = pkt->seq;
+    }
+
+  int icmp_ping(uint8_t *dst_ip, int count):
+    - Send count echo requests (seq 1..count)
+    - Each: build icmp_packet_t, type=8, compute checksum
+    - ip_send(dst_ip, 1, packet, sizeof(icmp_packet_t))
+    - Wait up to 1000ms for icmp_got_reply flag
+    - Print result: "64 bytes from X.X.X.X: seq=N time=Xms"
+    - Return number of successful replies
+
+════════════════════════════════════════
+PHASE 6 — UDP
+════════════════════════════════════════
+
+Create kernel/net/udp.c and kernel/net/udp.h
+
+  typedef struct {
+      uint16_t src_port;
+      uint16_t dst_port;
+      uint16_t length;
+      uint16_t checksum;
+  } __attribute__((packed)) udp_header_t;
+
+  int udp_send(uint8_t *dst_ip, uint16_t src_port,
+               uint16_t dst_port, uint8_t *data, uint16_t len):
+    - Build UDP header
+    - length = sizeof(udp_header_t) + len
+    - checksum = 0 (optional for IPv4)
+    - ip_send(dst_ip, 17, packet, total_len)
+
+  void udp_receive(uint8_t *data, uint16_t len, uint8_t *src_ip):
+    - Cast to udp_header_t
+    - Find registered handler for dst_port
+    - Call handler(src_ip, src_port, payload, payload_len)
+
+  void udp_register(uint16_t port, 
+                    void(*handler)(uint8_t*,uint16_t,
+                                   uint8_t*,uint16_t)):
+    - Register a callback for incoming UDP on port
+
+════════════════════════════════════════
+PHASE 7 — DNS
+════════════════════════════════════════
+
+Create kernel/net/dns.c and kernel/net/dns.h
+
+  DNS server: 8.8.8.8 (Google) or 10.0.2.3 (QEMU default)
+
+  int dns_resolve(const char *hostname, uint8_t *ip_out):
+    - Build DNS query packet:
+        Transaction ID: random uint16
+        Flags: 0x0100 (standard query, recursion desired)
+        Questions: 1
+        Question: hostname, type A (1), class IN (1)
+    - Send via udp_send(dns_server, 1234, 53, packet, len)
+    - Wait up to 3000ms for UDP reply on port 1234
+    - Parse response: find answer section, extract 4-byte IP
+    - Copy to ip_out
+    - Return 0 on success, -1 on timeout/error
+
+  Simple DNS packet builder:
+    - Encode hostname as labels: "google.com" → 
+      \x06google\x03com\x00
+    - Append type (0x0001) and class (0x0001)
+
+════════════════════════════════════════
+PHASE 8 — TCP (basic)
+════════════════════════════════════════
+
+Create kernel/net/tcp.c and kernel/net/tcp.h
+
+  typedef struct {
+      uint16_t src_port;
+      uint16_t dst_port;
+      uint32_t seq;
+      uint32_t ack;
+      uint8_t  data_offset;  // upper 4 bits = header len/4
+      uint8_t  flags;        // SYN=0x02,ACK=0x10,FIN=0x01,RST=0x04
+      uint16_t window;
+      uint16_t checksum;
+      uint16_t urgent;
+  } __attribute__((packed)) tcp_header_t;
+
+  typedef struct {
+      uint8_t  remote_ip[4];
+      uint16_t remote_port;
+      uint16_t local_port;
+      uint32_t seq;
+      uint32_t ack;
+      uint8_t  state;  // CLOSED,SYN_SENT,ESTABLISHED,FIN_WAIT,CLOSE_WAIT
+      uint8_t  rx_buf[8192];
+      uint16_t rx_len;
+  } tcp_conn_t;
+
+  Implement 3-way handshake:
+  int tcp_connect(uint8_t *ip, uint16_t port):
+    1. Send SYN (flags=0x02, seq=random)
+    2. Wait for SYN-ACK (flags=0x12)
+    3. Send ACK (flags=0x10, ack=their_seq+1)
+    4. Return connection handle on success
+
+  int tcp_send(tcp_conn_t *conn, uint8_t *data, uint16_t len):
+    - Build TCP segment with ACK flag
+    - ip_send with proto=6
+
+  int tcp_recv(tcp_conn_t *conn, uint8_t *buf, uint16_t maxlen):
+    - Wait for data in rx_buf (poll up to 5000ms)
+    - Copy to buf, return bytes received
+
+  int tcp_close(tcp_conn_t *conn):
+    - Send FIN, wait for FIN-ACK
+    - Send final ACK
+
+  TCP checksum uses pseudo-header:
+    src_ip + dst_ip + 0x00 + 0x06 + tcp_length
+
+════════════════════════════════════════
+PHASE 9 — HTTP CLIENT
+════════════════════════════════════════
+
+Create kernel/net/http.c and kernel/net/http.h
+
+  typedef struct {
+      int status_code;       // 200, 404, etc
+      char content_type[64];
+      uint32_t content_len;
+      uint8_t *body;         // kmalloc'd, caller must kfree
+      uint32_t body_len;
+  } http_response_t;
+
+  http_response_t *http_get(const char *url):
+    - Parse URL: extract hostname, port (default 80), path
+    - dns_resolve(hostname, ip)
+    - tcp_connect(ip, port)
+    - Send HTTP/1.0 GET request:
+        "GET /path HTTP/1.0\r\n"
+        "Host: hostname\r\n"
+        "User-Agent: NexOS/0.1\r\n"
+        "Connection: close\r\n"
+        "\r\n"
+    - Receive full response
+    - Parse status line: "HTTP/1.x 200 OK"
+    - Parse headers: find Content-Type, Content-Length
+    - Extract body (after \r\n\r\n separator)
+    - tcp_close()
+    - Return http_response_t*
+
+  void http_free(http_response_t *r):
+    if (r) { if (r->body) kfree(r->body); kfree(r); }
+
+════════════════════════════════════════
+PHASE 10 — SHELL NETWORK COMMANDS
+════════════════════════════════════════
+
+Add to userspace/shell/nsh.c:
+
+  ping [ip or hostname]:
+    - If hostname: dns_resolve first, print "PING hostname (ip)"
+    - icmp_ping(ip, 4)
+    - Print statistics: "4 packets transmitted, X received"
+
+  ifconfig:
+    - Print: "eth0: MAC=XX:XX:XX:XX:XX:XX"
+    - Print: "      inet 10.0.2.15 netmask 255.255.255.0"
+    - Print: "      gateway 10.0.2.2"
+    - Print: "      Status: UP"
+
+  wget [url]:
+    - http_get(url)
+    - Save body to /home/user/downloaded_file
+    - Print: "Saved X bytes to /home/user/downloaded_file"
+    - This proves the full network stack works end to end
+
+  dns [hostname]:
+    - dns_resolve(hostname, ip)
+    - Print: "hostname resolves to X.X.X.X"
+
+  netstat:
+    - Print all active TCP connections
+    - Print UDP ports with registered handlers
+
+════════════════════════════════════════
+PHASE 11 — QEMU NETWORK CONFIG
+════════════════════════════════════════
+
+Update tools/run_qemu.sh to add RTL8139 + NAT:
+  -netdev user,id=net0,hostfwd=tcp::2222-:22 \
+  -device rtl8139,netdev=net0 \
+
+Update tools/run_qemu_debug.sh with same flags.
+
+Update Makefile:
+  run-net:
+      make iso
+      $(QEMU) -cdrom build/nexos.iso \
+              -m 512 \
+              -netdev user,id=net0 \
+              -device rtl8139,netdev=net0 \
+              -serial stdio \
+              -vga std
+
+════════════════════════════════════════
+PHASE 12 — NETWORK INIT IN KERNEL
+════════════════════════════════════════
+
+In kernel/kernel.c after rtl8139_init(), add:
+
+  // Set our IP configuration (QEMU NAT)
+  uint8_t my_ip[4]  = {10, 0, 2, 15};
+  uint8_t gateway[4] = {10, 0, 2, 2};
+  uint8_t netmask[4] = {255, 255, 255, 0};
+  net_configure(my_ip, gateway, netmask);
+
+In kernel/net/net.c:
+  void net_configure(uint8_t *ip, uint8_t *gw, uint8_t *nm):
+    memcpy(my_ip, ip, 4);
+    memcpy(gateway_ip, gw, 4);
+    memcpy(netmask, nm, 4);
+    klog(INFO, "Net: IP=%d.%d.%d.%d GW=%d.%d.%d.%d",
+         ip[0],ip[1],ip[2],ip[3],
+         gw[0],gw[1],gw[2],gw[3]);
+
+════════════════════════════════════════
+BUILD ORDER
+════════════════════════════════════════
+
+Build each phase in order:
+  Phase 1:  make clean && make all — RTL8139 compiles
+  Phase 2:  make clean && make all — ethernet layer
+  Phase 3:  make clean && make all — ARP
+  Phase 4:  make clean && make all — IP
+  Phase 5:  make clean && make all — ping works
+  Phase 6:  make clean && make all — UDP
+  Phase 7:  make clean && make all — DNS
+  Phase 8:  make clean && make all — TCP
+  Phase 9:  make clean && make all — HTTP GET
+  Phase 10: make clean && make all — shell commands
+  Phase 11-12: make clean && make all — final integration
+
+After all phases complete:
+  1. Zero errors required
+  2. Show nexos.iso rebuilt
+  3. List all new .c and .h files created
+  4. Expected test sequence in nsh shell:
+       ifconfig
+       ping 10.0.2.2
+       ping 8.8.8.8
+       dns google.com
+       wget http://example.com
+       cat /home/user/downloaded_file

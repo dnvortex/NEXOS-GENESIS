@@ -18,6 +18,10 @@
 #include "../../kernel/net/icmp.h"
 #include "../../kernel/net/ethernet.h"
 #include "../../kernel/net/netif.h"
+#include "../../kernel/net/udp.h"
+#include "../../kernel/net/dns.h"
+#include "../../kernel/net/tcp.h"
+#include "../../kernel/net/http.h"
 
 /* ════════════════════════════════════════
  * String helpers (no libc)
@@ -847,7 +851,7 @@ static int cmd_which(int argc, char *argv[]) {
         "help","env","export","uname","uptime","ps","kill","free","date",
         "mount","reboot","halt","exit","logout",
         "hexdump","wc","head","tail","find","top","history","which","stat",
-        "tree","memmap","ver","ifconfig","ping", NULL
+        "tree","memmap","ver","ifconfig","ping","dns","wget","netstat", NULL
     };
     for (int i = 0; all_builtins[i]; i++) {
         if (nsh_strcmp(all_builtins[i], argv[1]) == 0) {
@@ -983,6 +987,68 @@ static int cmd_ifconfig(int argc, char *argv[]) {
     return 0;
 }
 
+/* ── dns ─────────────────────────────────────────────────────────────────── */
+static int cmd_dns(int argc, char *argv[]) {
+    if (argc < 2) { nsh_println("dns: usage: dns <hostname>"); return 1; }
+    if (!netif_is_up()) { nsh_println("dns: no network interface"); return 1; }
+    uint8_t ip[4];
+    if (dns_resolve(argv[1], ip) == 0) {
+        char buf[8];
+        nsh_print(argv[1]); nsh_print(" resolves to ");
+        nsh_uint_str(ip[0], buf); nsh_print(buf); nsh_putchar('.');
+        nsh_uint_str(ip[1], buf); nsh_print(buf); nsh_putchar('.');
+        nsh_uint_str(ip[2], buf); nsh_print(buf); nsh_putchar('.');
+        nsh_uint_str(ip[3], buf); nsh_println(buf);
+        return 0;
+    }
+    nsh_print("dns: failed to resolve "); nsh_println(argv[1]);
+    return 1;
+}
+
+/* ── wget ─────────────────────────────────────────────────────────────────── */
+static int cmd_wget(int argc, char *argv[]) {
+    if (argc < 2) { nsh_println("wget: usage: wget <url>"); return 1; }
+    if (!netif_is_up()) { nsh_println("wget: no network interface"); return 1; }
+    nsh_print("Fetching "); nsh_println(argv[1]);
+    http_response_t *r = http_get(argv[1]);
+    if (!r) { nsh_println("wget: request failed"); return 1; }
+    char buf[16];
+    nsh_print("HTTP "); nsh_uint_str((uint64_t)r->status_code, buf); nsh_print(buf);
+    nsh_print("  "); nsh_uint_str(r->body_len, buf); nsh_println(" bytes");
+    if (r->body && r->body_len > 0) {
+        /* Print first 512 bytes of body */
+        uint32_t show = r->body_len < 512 ? r->body_len : 512;
+        for (uint32_t i = 0; i < show; i++) {
+            char c = (char)r->body[i];
+            if (c == '\n') nsh_println("");
+            else if (c >= 0x20 || c == '\t') nsh_putchar(c);
+        }
+        if (r->body_len > 512) nsh_println("\n[... truncated ...]");
+        else nsh_println("");
+    }
+    http_free(r);
+    return 0;
+}
+
+/* ── netstat ──────────────────────────────────────────────────────────────── */
+static int cmd_netstat(int argc, char *argv[]) {
+    (void)argc; (void)argv;
+    nsh_println("Proto  Local           Remote          State");
+    nsh_println("UDP    *:1053          *:*             UNBOUND  (DNS client)");
+    nsh_println("ICMP   10.0.2.15       *               ACTIVE");
+    netif_t *nif = netif_get_default();
+    if (nif) {
+        char buf[8];
+        nsh_print("eth0   10.0.2.15       (UP)  MAC: ");
+        for (int i = 0; i < 6; i++) {
+            print_hex_byte(nif->mac[i]);
+            if (i < 5) nsh_putchar(':');
+        }
+        nsh_println("");
+    }
+    return 0;
+}
+
 /* ── ping ────────────────────────────────────────────────────────────────── */
 static int cmd_ping(int argc, char *argv[]) {
     if (argc < 2) { nsh_println("ping: usage: ping <ip>"); return 1; }
@@ -1029,7 +1095,7 @@ static const char *builtin_names[] = {
     "help","env","export","uname","uptime","ps","kill","free","date",
     "mount","reboot","halt","exit","logout",
     "hexdump","wc","head","tail","find","top","history","which","stat",
-    "tree","memmap","ver","ifconfig","ping",NULL
+    "tree","memmap","ver","ifconfig","ping","dns","wget","netstat",NULL
 };
 
 static void tab_complete(char *line, int *len) {
@@ -1179,8 +1245,11 @@ static int nsh_exec_builtin(int argc, char *argv[]) {
     if (nsh_strcmp(cmd,"tree")==0)    return cmd_tree(argc,argv);
     if (nsh_strcmp(cmd,"memmap")==0)  return cmd_memmap(argc,argv);
     if (nsh_strcmp(cmd,"ver")==0)     return cmd_ver(argc,argv);
-    if (nsh_strcmp(cmd,"ifconfig")==0)return cmd_ifconfig(argc,argv);
-    if (nsh_strcmp(cmd,"ping")==0)    return cmd_ping(argc,argv);
+    if (nsh_strcmp(cmd,"ifconfig")==0) return cmd_ifconfig(argc,argv);
+    if (nsh_strcmp(cmd,"ping")==0)     return cmd_ping(argc,argv);
+    if (nsh_strcmp(cmd,"dns")==0)      return cmd_dns(argc,argv);
+    if (nsh_strcmp(cmd,"wget")==0)     return cmd_wget(argc,argv);
+    if (nsh_strcmp(cmd,"netstat")==0)  return cmd_netstat(argc,argv);
 
     nsh_print("nsh: command not found: "); nsh_println(cmd);
     return 127;

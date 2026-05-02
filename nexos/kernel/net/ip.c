@@ -3,6 +3,8 @@
 #include "ethernet.h"
 #include "arp.h"
 #include "icmp.h"
+#include "udp.h"
+#include "tcp.h"
 #include "../kernel.h"
 #include "../mm/heap.h"
 
@@ -74,11 +76,19 @@ void ip_receive(const uint8_t *data, uint16_t len) {
     /* Update ARP cache with sender */
     uint32_t src_ip = ((uint32_t)data[12] << 24) | ((uint32_t)data[13] << 16)
                      | ((uint32_t)data[14] <<  8) |  data[15];
-    (void)src_ip;
+
+    /* Verify destination is us */
+    uint32_t dst_ip = ((uint32_t)data[16] << 24) | ((uint32_t)data[17] << 16)
+                     | ((uint32_t)data[18] <<  8) |  data[19];
+    if (dst_ip != eth_our_ip) return;
 
     const uint8_t *payload = data + ihl;
-    uint16_t plen = len - ihl;
+    uint16_t plen = (uint16_t)(len - ihl);
 
-    if (protocol == IP_PROTO_ICMP)
-        icmp_receive(data, len, payload, plen);
+    switch (protocol) {
+    case IP_PROTO_ICMP: icmp_receive(data, len, payload, plen);     break;
+    case IP_PROTO_UDP:  udp_receive(payload, plen, src_ip);         break;
+    case IP_PROTO_TCP:  tcp_receive(payload, plen, src_ip);         break;
+    default:                                                         break;
+    }
 }
