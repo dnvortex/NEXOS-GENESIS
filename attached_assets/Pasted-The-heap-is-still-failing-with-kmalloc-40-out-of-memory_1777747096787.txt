@@ -1,0 +1,79 @@
+The heap is still failing with kmalloc(40) out of memory despite 
+the 16MB heap fix. The boot shows kstack at 0x11b2f0 suggesting 
+heap is still 2MB. Please do the following diagnostic and fixes:
+
+════════════════════════════════════════
+STEP 1 — Verify and force the heap size
+════════════════════════════════════════
+Run this command and show the output:
+  grep -rn "HEAP_SIZE\|heap_size\|2048\|16.*1024" nexos/kernel/
+
+Then run:
+  size build/nexos.kernel
+
+Show the exact text+data+bss numbers. BSS should be ~16MB if 
+the heap array is there. If BSS is small (under 1MB), the heap 
+size change did not apply.
+
+════════════════════════════════════════
+STEP 2 — Change heap to dynamic mapping instead of static array
+════════════════════════════════════════
+The static BSS array approach for a 16MB heap is fragile. 
+Replace it with a fixed virtual address approach.
+
+In kernel/mm/heap.c:
+  - Remove any static uint8_t heap_mem[HEAP_SIZE] array from BSS
+  - Instead, define a fixed heap start address:
+      #define HEAP_START 0x0000000001200000  // 18MB mark, well inside 32MB map
+      #define HEAP_SIZE  (8 * 1024 * 1024)   // 8MB
+  - In heap_init(), set the heap base pointer to HEAP_START:
+      heap_base = (heap_block_t *)HEAP_START;
+  - Initialize the first free block header at HEAP_START covering 
+    HEAP_SIZE bytes
+  - In kernel.c, after boot.asm maps 32MB, this address is valid
+
+In kernel/mm/pmm.c, reserve this heap region:
+  pmm_deinit_region(0x1200000, 8 * 1024 * 1024);
+
+════════════════════════════════════════
+STEP 3 — Fix the NULL pointer crash in init.c
+════════════════════════════════════════
+RIP=0x3 means a function pointer or vtable entry with value 
+0x3 (near NULL) was called. This is almost certainly a 
+kmalloc() returning NULL and the result being used as a 
+struct with a function pointer inside it.
+
+Read userspace/init/init.c and kernel/fs/fat32.c carefully.
+After EVERY kmalloc/kmalloc call add:
+  if (!ptr) { 
+    klog(ERROR, "kmalloc failed: <what was being allocated>");
+    return -1; 
+  }
+
+Specifically check:
+  a) fat32_mount() — does it kmalloc a fat32_volume_t and then 
+     call a function pointer through it?
+  b) Any place in init.c where a returned pointer is used 
+     immediately as a struct without NULL checking
+
+════════════════════════════════════════
+STEP 4 — Print heap stats at init start
+════════════════════════════════════════
+At the very start of init_main(), before any vfs or mkdir 
+calls, add:
+  extern size_t heap_free_space(void);  // add this to heap.h
+  klog(INFO, "init: heap free at start = %d KB", 
+       heap_free_space() / 1024);
+
+Implement heap_free_space() in heap.c to walk the free list 
+and return total free bytes. This tells us exactly how much 
+heap is available when init starts.
+
+════════════════════════════════════════
+STEP 5 — Rebuild and verify
+════════════════════════════════════════
+Run make clean && make all
+Show:
+  1. Output of: size build/nexos.kernel  (BSS must be >8MB)
+  2. Output of: grep -n "HEAP" nexos/kernel/mm/heap.c
+  3. Confirm nexos.iso rebuilt

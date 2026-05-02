@@ -104,3 +104,13 @@ void *kmalloc_aligned(size_t size, size_t align) {
     uintptr_t aligned = ALIGN_UP(addr, align);
     return (void *)aligned;
 }
+
+size_t heap_free_space(void) {
+    size_t total = 0;
+    block_header_t *blk = heap_start;
+    while (blk) {
+        if (blk->free) total += blk->size;
+        blk = blk->next;
+    }
+    return total;
+}

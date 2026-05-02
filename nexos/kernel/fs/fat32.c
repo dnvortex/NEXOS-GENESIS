@@ -89,6 +89,7 @@ static uint32_t fat32_read_data(fat32_volume_t *vol, uint32_t first_cluster,
 /* VFS read callback */
 static uint32_t fat32_vfs_read(vfs_node_t *node, uint64_t offset, uint32_t size, uint8_t *buf) {
     fat32_file_priv_t *priv = (fat32_file_priv_t *)node->priv;
+    if (!priv) return 0;
     if (offset >= priv->file_size) return 0;
     uint32_t avail = priv->file_size - (uint32_t)offset;
     if (size > avail) size = avail;

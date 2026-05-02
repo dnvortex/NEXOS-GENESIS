@@ -136,11 +136,13 @@ void kpanic(const char *fmt, ...) {
     klog(LOG_PANIC, "PANIC — system halted");
 }
 
-/* ── Static kernel heap (16 MB, placed in BSS — covered by kernel_end) ──── */
-/* boot.asm identity-maps 32 MB (16×2MB huge pages), so kernel_end ≈ 17.5 MB */
-/* is safely within that window even with the full 16 MB heap in BSS.         */
-#define HEAP_SIZE (16 * 1024 * 1024)
-static uint8_t kernel_heap_area[HEAP_SIZE] __attribute__((aligned(4096)));
+/* ── Heap lives at a fixed physical address, NOT in BSS ─────────────────────
+ * HEAP_START / HEAP_SIZE are defined in mm/heap.h.
+ * boot.asm identity-maps 32 MB (16×2 MB huge pages); the 8 MB window at
+ * 18–26 MB (0x1200000–0x1A00000) is always accessible before paging_init.
+ * PMM explicitly reserves that range below, so no driver can reclaim it.
+ * Removing the static array keeps kernel_end ≈ 1.5 MB and avoids the risk
+ * of GRUB mis-handling a 17 MB BSS zero-fill. */
 
 /* ── Init process entry (userspace/init/init.c) ─────────────────────────── */
 extern void init_main(void);
@@ -225,30 +227,37 @@ void kernel_main(uint32_t mb2_magic, mb2_info_t *mb2_info) {
     /*
      * Re-mark reserved regions as used (precise reservations).
      *
-     * FIX: instead of a blunt 4 MB deinit, we reserve exactly:
+     * Reserve exactly:
      *   a) First 1 MB — BIOS/legacy I/O area
-     *   b) Kernel image — from linker symbol kernel_start to kernel_end,
-     *      which covers: code, rodata, data, BSS (including the 2 MB static
-     *      heap, PMM bitmap, boot page tables, and boot stack).
+     *   b) Kernel image — from linker symbol kernel_start to kernel_end
+     *      (code + rodata + data + BSS: PMM bitmap, boot tables, boot stack,
+     *      nsh/init statics).  BSS is now ~1.5 MB; no heap array inside it.
+     *   c) Fixed heap window at 0x1200000 (18 MB) — 8 MB for the allocator.
      *
-     * pmm_deinit_region() is now safe: it only decrements pmm_free_pages
-     * for frames that were actually free, preventing counter corruption.
+     * pmm_deinit_region() is safe: decrements pmm_free_pages only when the
+     * frame was actually free, preventing counter corruption.
      */
-    pmm_deinit_region(0, 0x100000);   /* first 1 MB */
+    pmm_deinit_region(0, 0x100000);   /* first 1 MB (BIOS/legacy) */
 
     uint64_t kstart = (uint64_t)(uintptr_t)kernel_start;
     uint64_t kend   = (uint64_t)(uintptr_t)kernel_end;
-    pmm_deinit_region(kstart, kend - kstart);  /* entire kernel binary + BSS */
+    pmm_deinit_region(kstart, kend - kstart);  /* kernel image + BSS */
 
-    klog(LOG_INFO, "PMM: kernel image 0x%x – 0x%x reserved (%llu KB)",
-         kstart, kend, (kend - kstart) / 1024);
+    /* Reserve the fixed heap window so PMM never hands it to a driver */
+    pmm_deinit_region(HEAP_START, HEAP_SIZE);
+
+    klog(LOG_INFO, "PMM: kernel 0x%x–0x%x (%llu KB), heap 0x%x–0x%x (%u MB)",
+         kstart, kend, (kend - kstart) / 1024,
+         (uint64_t)HEAP_START, (uint64_t)(HEAP_START + HEAP_SIZE),
+         (unsigned)(HEAP_SIZE >> 20));
     klog(LOG_INFO, "PMM: %llu MB free of %llu MB total (%llu frames)",
          pmm_get_free_memory()  / (1024 * 1024),
          pmm_get_total_memory() / (1024 * 1024),
          pmm_get_free_frames());
 
-    /* ── 6. Heap (static 2 MB arena, no VMM dependency) ─────────────────── */
-    heap_init(kernel_heap_area, HEAP_SIZE);
+    /* ── 6. Heap — fixed 8 MB at physical 0x1200000 (18 MB mark) ──────────
+     * boot.asm maps 32 MB; this address is always valid.  No BSS array.   */
+    heap_init((void *)HEAP_START, HEAP_SIZE);
 
     /* ── 7. Paging — inherits boot.asm CR3, no page-table teardown ────────── */
     paging_init();

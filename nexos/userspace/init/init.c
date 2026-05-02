@@ -91,6 +91,8 @@ static void reap_zombies(void) {
 
 void init_main(void) {
     klog(LOG_INFO, "init: PID 1 starting");
+    klog(LOG_INFO, "init: heap free at entry = %u KB",
+         (unsigned)(heap_free_space() / 1024));
 
     /* Create mount/tmp dirs BEFORE try_mount_disk so vfs_mount("/mnt",...)
      * finds an existing directory to overlay.  Without this, fat32_mount
