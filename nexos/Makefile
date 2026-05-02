@@ -27,6 +27,7 @@ CFLAGS = -std=c11 -ffreestanding -fno-stack-protector -fno-pic \
 	 -Wall -Wextra -O2 -m64 -mcmodel=kernel \
 	 -nostdlib -nostdinc \
 	 -I$(ROOT) -I$(KERNEL) -I$(KERNEL)/include \
+	 -I$(KERNEL)/gui -I$(KERNEL)/drivers \
 	 -Wno-unused-parameter -Wno-unused-variable
 
 ASFLAGS = -f elf64
@@ -68,7 +69,21 @@ KERNEL_C_SOURCES = \
     $(KERNEL)/net/tcp.c \
     $(KERNEL)/net/http.c \
     $(USER)/init/init.c \
-    $(USER)/shell/nsh.c
+    $(USER)/shell/nsh.c \
+    $(KERNEL)/drivers/fb.c \
+    $(KERNEL)/drivers/font.c \
+    $(KERNEL)/drivers/console.c \
+    $(KERNEL)/drivers/mouse.c \
+    $(KERNEL)/gui/wm.c \
+    $(KERNEL)/gui/desktop.c \
+    $(KERNEL)/gui/taskbar.c \
+    $(KERNEL)/gui/launcher.c \
+    $(KERNEL)/gui/term_app.c \
+    $(KERNEL)/gui/files_app.c \
+    $(KERNEL)/gui/sysinfo_app.c \
+    $(KERNEL)/gui/theme_app.c \
+    $(KERNEL)/gui/notif.c \
+    $(KERNEL)/gui/gui.c
 
 # ---- Assembly sources ----
 KERNEL_ASM_SOURCES = \

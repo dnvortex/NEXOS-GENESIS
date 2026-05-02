@@ -131,9 +131,11 @@ void init_main(void) {
 
     /* /proc is already mounted by procfs_init() in kernel_main */
 
-    klog(LOG_INFO, "init: launching shell (nsh)");
-    vga_set_color(VGA_COLOR_WHITE, VGA_COLOR_BLACK);
-
+    extern void gui_main(void);
+    klog(LOG_INFO, "init: launching GUI desktop");
+    gui_main();
+    /* fallback: if GUI exits (e.g. no framebuffer), run text shell */
+    klog(LOG_INFO, "init: GUI exited, launching text shell");
     nsh_main();
 
     vga_set_color(VGA_COLOR_LIGHT_RED, VGA_COLOR_BLACK);

@@ -7,6 +7,8 @@
 #include "drivers/ata.h"
 #include "drivers/pci.h"
 #include "drivers/rtc.h"
+#include "drivers/fb.h"
+#include "drivers/console.h"
 #include "arch/x86_64/gdt.h"
 #include "arch/x86_64/idt.h"
 #include "arch/x86_64/paging.h"
@@ -31,6 +33,7 @@ extern uint8_t kernel_end[];
 /* ── Multiboot2 structures (corrected field layout) ─────────────────────── */
 #define MB2_TAG_END  0
 #define MB2_TAG_MMAP 6
+#define MB2_TAG_FB   8
 
 typedef struct { uint32_t total_size; uint32_t reserved; }
     __attribute__((packed)) mb2_info_t;
@@ -138,7 +141,10 @@ void klog(log_level_t level, const char *fmt, ...) {
     buf[bi++]='\n'; buf[bi]=0;
 
     serial_puts(buf);
-    vga_puts(buf);
+    if (fb.initialized)
+        console_puts(buf);
+    else
+        vga_puts(buf);
 
     if (level == LOG_PANIC) { cli(); for(;;) hlt(); }
 }
@@ -274,6 +280,44 @@ void kernel_main(uint32_t mb2_magic, mb2_info_t *mb2_info) {
     /* ── 7. Paging — inherits boot.asm CR3, no page-table teardown ────────── */
     paging_init();
     vmm_init();
+
+    /* ── 7.5 Framebuffer — map + init after VMM so vmm_map works ─────────── */
+    if (mb2_magic == MULTIBOOT2_BOOTLOADER_MAGIC && mb2_info) {
+        uint8_t *tp = (uint8_t *)mb2_info + 8;
+        while (1) {
+            mb2_tag_t *tag = (mb2_tag_t *)tp;
+            if (tag->type == MB2_TAG_END) break;
+            if (tag->type == MB2_TAG_FB) {
+                mb2_tag_fb_t *fbt = (mb2_tag_fb_t *)tag;
+                if (fbt->framebuffer_type == 1) { /* direct RGB */
+                    uint64_t fb_phys = fbt->framebuffer_addr;
+                    uint32_t fb_size = fbt->framebuffer_pitch *
+                                       fbt->framebuffer_height;
+                    /* Map framebuffer pages: present + writable */
+                    for (uint64_t off = 0; off < fb_size; off += 4096)
+                        vmm_map(fb_phys + off, fb_phys + off, VMM_FLAG_WRITE);
+                    fb_init(fb_phys,
+                            fbt->framebuffer_width,
+                            fbt->framebuffer_height,
+                            fbt->framebuffer_pitch,
+                            fbt->framebuffer_bpp);
+                    console_init();
+                    klog(LOG_INFO,
+                         "FB: %ux%ux%ubpp at 0x%x pitch=%u",
+                         fbt->framebuffer_width,
+                         fbt->framebuffer_height,
+                         fbt->framebuffer_bpp,
+                         (uint32_t)fb_phys,
+                         fbt->framebuffer_pitch);
+                }
+            }
+            uint32_t sz = tag->size;
+            if (sz % 8) sz += 8 - (sz % 8);
+            tp += sz;
+        }
+    }
+    if (!fb.initialized)
+        klog(LOG_WARN, "FB: no framebuffer tag from GRUB - GUI will not start");
 
     /* ── 8. PIT timer at 1000 Hz ──────────────────────────────────────────── */
     timer_init(1000);

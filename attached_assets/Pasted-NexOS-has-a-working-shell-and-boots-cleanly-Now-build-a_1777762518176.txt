@@ -1,0 +1,1133 @@
+NexOS has a working shell and boots cleanly. Now build a 
+complete modern graphical desktop environment from scratch.
+Read ALL existing files before modifying anything. 
+Build and verify zero errors after each phase.
+
+════════════════════════════════════════════════════════
+PRE-FLIGHT — READ THESE FILES FIRST
+════════════════════════════════════════════════════════
+
+Before writing a single line, read:
+  - kernel/kernel.c          (init order, subsystems)
+  - kernel/arch/x86_64/boot.asm  (multiboot2 header)
+  - boot/grub/grub.cfg       (current gfx settings)
+  - kernel/drivers/vga.c     (current text mode driver)
+  - kernel/drivers/keyboard.c (key input)
+  - kernel/mm/heap.c         (kmalloc — heap is 8MB at 0x1200000)
+  - boot/linker.ld           (memory layout)
+  - Makefile                 (build system)
+
+════════════════════════════════════════════════════════
+PHASE 1 — GRUB FRAMEBUFFER + FB DRIVER
+════════════════════════════════════════════════════════
+
+1A — Update boot/grub/grub.cfg
+Replace existing gfxmode settings with:
+  set gfxmode=1024x768x32
+  set gfxpayload=keep
+  insmod all_video
+  insmod gfxterm
+  terminal_output gfxterm
+
+1B — Update Multiboot2 header in boot.asm
+Replace existing framebuffer tag with:
+  ; Framebuffer tag (type=5)
+  align 8
+  .fb_tag_start:
+    dw 5           ; type
+    dw 1           ; flags (optional)
+    dd (.fb_tag_end - .fb_tag_start)
+    dd 1024        ; width
+    dd 768         ; height
+    dd 32          ; depth
+  .fb_tag_end:
+  align 8
+  ; End tag
+  dw 0
+  dw 0
+  dd 8
+
+1C — Create kernel/drivers/fb.h
+  #pragma once
+  #include <stdint.h>
+
+  typedef struct {
+      uint32_t *addr;
+      uint32_t  width;
+      uint32_t  height;
+      uint32_t  pitch;      // bytes per row
+      uint8_t   bpp;
+      uint8_t   initialized;
+  } framebuffer_t;
+
+  extern framebuffer_t fb;
+
+  // Catppuccin Mocha palette (default theme)
+  #define COL_BASE     0x1E1E2E  // desktop background
+  #define COL_MANTLE   0x181825  // darker bg
+  #define COL_CRUST    0x11111B  // darkest
+  #define COL_SURFACE0 0x313244  // window bg
+  #define COL_SURFACE1 0x45475A  // lighter surface
+  #define COL_SURFACE2 0x585B70  // lightest surface
+  #define COL_OVERLAY0 0x6C7086  // overlay
+  #define COL_TEXT     0xCDD6F4  // primary text
+  #define COL_SUBTEXT  0xA6ADC8  // secondary text
+  #define COL_BLUE     0x89B4FA  // accent blue
+  #define COL_LAVENDER 0xB4BEFE  // accent lavender
+  #define COL_MAUVE    0xCBA6F7  // accent purple
+  #define COL_RED      0xF38BA8  // close / error
+  #define COL_PEACH    0xFAB387  // warning
+  #define COL_YELLOW   0xF9E2AF  // minimize
+  #define COL_GREEN    0xA6E3A1  // success / maximize
+  #define COL_TEAL     0x94E2D5  // teal accent
+  #define COL_SKY      0x89DCEB  // sky accent
+
+  void fb_init(uint64_t addr, uint32_t w, 
+               uint32_t h, uint32_t pitch, uint8_t bpp);
+  void fb_put_pixel(int x, int y, uint32_t color);
+  void fb_fill_rect(int x, int y, int w, int h, uint32_t color);
+  void fb_draw_rect_outline(int x, int y, int w, int h,
+                            uint32_t color, int thickness);
+  void fb_draw_line(int x0, int y0, int x1, int y1,
+                    uint32_t color);
+  void fb_fill_rounded_rect(int x, int y, int w, int h,
+                            int radius, uint32_t color);
+  void fb_draw_circle(int cx, int cy, int r, uint32_t color);
+  void fb_fill_circle(int cx, int cy, int r, uint32_t color);
+  void fb_clear(uint32_t color);
+  void fb_scroll_up(int pixels, uint32_t bg_color);
+  uint32_t fb_blend(uint32_t fg, uint32_t bg, uint8_t alpha);
+  void fb_copy_rect(int sx, int sy, int dx, int dy, 
+                    int w, int h);
+
+1D — Create kernel/drivers/fb.c
+Implement all functions from fb.h:
+
+  framebuffer_t fb = {0};
+
+  void fb_init(uint64_t addr, uint32_t w, uint32_t h,
+               uint32_t pitch, uint8_t bpp) {
+      fb.addr  = (uint32_t*)addr;
+      fb.width = w; fb.height = h;
+      fb.pitch = pitch; fb.bpp = bpp;
+      fb.initialized = 1;
+  }
+
+  void fb_put_pixel(int x, int y, uint32_t color) {
+      if (x<0||y<0||x>=(int)fb.width||y>=(int)fb.height) 
+          return;
+      uint32_t *row = (uint32_t*)
+          ((uint8_t*)fb.addr + y * fb.pitch);
+      row[x] = color;
+  }
+
+  void fb_fill_rect(int x, int y, int w, int h, uint32_t c) {
+      for (int row=y; row<y+h; row++)
+          for (int col=x; col<x+w; col++)
+              fb_put_pixel(col, row, c);
+  }
+
+  void fb_fill_rounded_rect(int x,int y,int w,int h,
+                            int r,uint32_t c):
+    Use midpoint circle algorithm for corners.
+    Fill center rect + 4 corner quadrants.
+
+  uint32_t fb_blend(uint32_t fg, uint32_t bg, uint8_t alpha):
+    uint8_t r = ((fg>>16&0xFF)*alpha + 
+                 (bg>>16&0xFF)*(255-alpha)) / 255;
+    uint8_t g = ((fg>>8&0xFF)*alpha + 
+                 (bg>>8&0xFF)*(255-alpha)) / 255;
+    uint8_t b = ((fg&0xFF)*alpha + 
+                 (bg&0xFF)*(255-alpha)) / 255;
+    return (r<<16)|(g<<8)|b;
+
+  void fb_scroll_up(int pixels, uint32_t bg):
+    memmove(fb.addr,
+            (uint8_t*)fb.addr + pixels * fb.pitch,
+            (fb.height - pixels) * fb.pitch);
+    fb_fill_rect(0, fb.height-pixels, fb.width, pixels, bg);
+
+  fb_draw_line: Bresenham's line algorithm
+  fb_draw_circle: Midpoint circle algorithm (outline only)
+  fb_fill_circle: Fill using horizontal spans
+
+1E — Create kernel/drivers/font.c and kernel/drivers/font.h
+
+Embed a complete 8x16 VGA bitmap font (256 glyphs).
+Use the standard IBM PC 8x16 font data.
+Store as: static const uint8_t font8x16[256][16];
+
+Implement:
+  void font_putchar(int x, int y, char c,
+                    uint32_t fg, uint32_t bg);
+  void font_puts(int x, int y, const char *s,
+                 uint32_t fg, uint32_t bg);
+  void font_printf(int x, int y, uint32_t fg, uint32_t bg,
+                   const char *fmt, ...);
+  // 2x scaled versions for titles/headings:
+  void font_putchar2x(int x, int y, char c,
+                      uint32_t fg, uint32_t bg);
+  void font_puts2x(int x, int y, const char *s,
+                   uint32_t fg, uint32_t bg);
+  int  font_str_width(const char *s);   // pixels at 1x
+  int  font_str_width2x(const char *s); // pixels at 2x
+
+1F — Parse framebuffer from Multiboot2 in kernel.c
+
+In kernel_main(), add BEFORE vga_init():
+  // Find framebuffer tag (type 8) in MB2 info
+  mb2_tag_fb_t *fbtag = mb2_find_tag(mb2_info, 8);
+  if (fbtag && fbtag->framebuffer_type == 1) {
+      // Map framebuffer memory (may be at high addr like 0xFD000000)
+      uint64_t fb_addr = fbtag->framebuffer_addr;
+      uint32_t fb_size = fbtag->framebuffer_pitch * 
+                         fbtag->framebuffer_height;
+      // Map every page of framebuffer as present+writable
+      for (uint64_t off=0; off<fb_size; off+=4096)
+          vmm_map_page(fb_addr+off, fb_addr+off, 
+                       PAGE_PRESENT|PAGE_WRITABLE);
+      fb_init(fb_addr, fbtag->framebuffer_width,
+              fbtag->framebuffer_height,
+              fbtag->framebuffer_pitch,
+              fbtag->framebuffer_bpp);
+      klog(INFO, "FB: %dx%dx%dbpp at 0x%x",
+           fbtag->framebuffer_width,
+           fbtag->framebuffer_height,
+           fbtag->framebuffer_bpp,
+           (uint32_t)fb_addr);
+  } else {
+      klog(WARN, "FB: no framebuffer tag from GRUB");
+  }
+
+Add to kernel/kernel.h:
+  typedef struct {
+      uint32_t type;
+      uint32_t size;
+      uint64_t framebuffer_addr;
+      uint32_t framebuffer_pitch;
+      uint32_t framebuffer_width;
+      uint32_t framebuffer_height;
+      uint8_t  framebuffer_bpp;
+      uint8_t  framebuffer_type;
+      uint16_t reserved;
+  } __attribute__((packed)) mb2_tag_fb_t;
+
+1G — Create kernel/drivers/console.c + console.h
+This replaces VGA text output with framebuffer text rendering.
+
+  #define CON_COLS   128   // characters per row (1024/8)
+  #define CON_ROWS   48    // rows (768/16)
+  #define CON_PAD_X  8     // left padding pixels
+  #define CON_PAD_Y  8     // top padding pixels
+
+  static int con_x = 0, con_y = 0;
+  static uint32_t con_fg = COL_TEXT;
+  static uint32_t con_bg = COL_BASE;
+
+  void console_init(void);
+  void console_putchar(char c);
+  void console_puts(const char *s);
+  void console_printf(const char *fmt, ...);
+  void console_set_color(uint32_t fg, uint32_t bg);
+  void console_clear(void);
+  void console_set_pos(int x, int y);
+
+  console_putchar handles:
+    \n → next line, scroll if at bottom
+    \r → col = 0
+    \t → advance to next 8-char boundary
+    \b → backspace
+    other → font_putchar at pixel pos, advance
+
+  Scroll: fb_scroll_up(16, con_bg) when at bottom row.
+
+Replace all klog VGA calls with console calls.
+
+════════════════════════════════════════════════════════
+PHASE 2 — PS/2 MOUSE DRIVER
+════════════════════════════════════════════════════════
+
+Create kernel/drivers/mouse.c and kernel/drivers/mouse.h
+
+2A — Initialization
+  static int mouse_x, mouse_y;
+  static uint8_t mouse_btns;
+  static uint8_t mouse_cycle = 0;
+  static uint8_t mouse_bytes[3];
+
+  void mouse_wait_write(void) {
+      int t = 100000;
+      while (t-- && (inb(0x64)&2));
+  }
+  void mouse_wait_read(void) {
+      int t = 100000;
+      while (t-- && !(inb(0x64)&1));
+  }
+  void mouse_write(uint8_t val) {
+      mouse_wait_write();
+      outb(0x64, 0xD4);
+      mouse_wait_write();
+      outb(0x60, val);
+  }
+  uint8_t mouse_read(void) {
+      mouse_wait_read();
+      return inb(0x60);
+  }
+
+  void mouse_init():
+    // Enable aux device
+    mouse_wait_write(); outb(0x64, 0xA8);
+    // Enable aux interrupts
+    mouse_wait_write(); outb(0x64, 0x20);
+    mouse_wait_read();
+    uint8_t status = inb(0x60) | 2;
+    mouse_wait_write(); outb(0x64, 0x60);
+    mouse_wait_write(); outb(0x60, status);
+    // Set defaults + enable
+    mouse_write(0xF6); mouse_read(); // ack
+    mouse_write(0xF4); mouse_read(); // ack
+    // Install IRQ12
+    idt_register_irq(12, mouse_irq_handler);
+    mouse_x = fb.width / 2;
+    mouse_y = fb.height / 2;
+    klog(INFO, "Mouse: PS/2 initialized");
+
+2B — IRQ12 handler + packet decoding
+  void mouse_irq_handler(registers_t *r):
+    mouse_bytes[mouse_cycle] = inb(0x60);
+    if (mouse_cycle == 0 && !(mouse_bytes[0] & 0x08))
+        return; // bit 3 must always be set in byte 0
+    mouse_cycle++;
+    if (mouse_cycle == 3) {
+        mouse_cycle = 0;
+        mouse_btns = mouse_bytes[0] & 0x07;
+        int dx = (int8_t)mouse_bytes[1];
+        int dy = -(int8_t)mouse_bytes[2];
+        // Handle overflow bits
+        if (mouse_bytes[0] & 0x40) dx = (dx>0)?-127:127;
+        if (mouse_bytes[0] & 0x80) dy = (dy>0)?-127:127;
+        mouse_x += dx;
+        mouse_y += dy;
+        if (mouse_x < 0) mouse_x = 0;
+        if (mouse_y < 0) mouse_y = 0;
+        if (mouse_x >= (int)fb.width)  
+            mouse_x = fb.width-1;
+        if (mouse_y >= (int)fb.height) 
+            mouse_y = fb.height-1;
+        mouse_needs_redraw = 1;
+    }
+
+2C — Cursor rendering (hardware sprite simulation)
+  #define CUR_W 12
+  #define CUR_H 20
+  static uint32_t cursor_save[CUR_W * CUR_H];
+  static int cursor_saved_x = -1, cursor_saved_y = -1;
+
+  // Classic arrow cursor bitmap (12x20, 1=opaque 0=transparent)
+  static const uint8_t cursor_bmp[CUR_H][CUR_W] = {
+    {1,0,0,0,0,0,0,0,0,0,0,0},
+    {1,1,0,0,0,0,0,0,0,0,0,0},
+    {1,2,1,0,0,0,0,0,0,0,0,0},
+    {1,2,2,1,0,0,0,0,0,0,0,0},
+    {1,2,2,2,1,0,0,0,0,0,0,0},
+    {1,2,2,2,2,1,0,0,0,0,0,0},
+    {1,2,2,2,2,2,1,0,0,0,0,0},
+    {1,2,2,2,2,2,2,1,0,0,0,0},
+    {1,2,2,2,2,2,2,2,1,0,0,0},
+    {1,2,2,2,2,2,2,2,2,1,0,0},
+    {1,2,2,2,2,2,2,1,1,1,0,0},
+    {1,2,2,2,1,2,2,1,0,0,0,0},
+    {1,2,2,1,0,1,2,2,1,0,0,0},
+    {1,2,1,0,0,1,2,2,1,0,0,0},
+    {1,1,0,0,0,0,1,2,2,1,0,0},
+    {0,0,0,0,0,0,1,2,2,1,0,0},
+    {0,0,0,0,0,0,0,1,1,0,0,0},
+    {0,0,0,0,0,0,0,0,0,0,0,0},
+    {0,0,0,0,0,0,0,0,0,0,0,0},
+    {0,0,0,0,0,0,0,0,0,0,0,0},
+  };
+  // 1=black outline, 2=white fill, 0=transparent
+
+  void cursor_restore(void);  // restore saved pixels
+  void cursor_draw(int x, int y);  // save + draw cursor
+
+  void cursor_draw(int x, int y):
+    cursor_restore();
+    // Save pixels under new position
+    for (int cy=0; cy<CUR_H; cy++)
+      for (int cx=0; cx<CUR_W; cx++)
+        cursor_save[cy*CUR_W+cx] = 
+            fb_get_pixel(x+cx, y+cy);
+    cursor_saved_x = x; cursor_saved_y = y;
+    // Draw cursor
+    for (int cy=0; cy<CUR_H; cy++)
+      for (int cx=0; cx<CUR_W; cx++)
+        if (cursor_bmp[cy][cx]==1) 
+            fb_put_pixel(x+cx,y+cy, 0x000000); // outline
+        else if (cursor_bmp[cy][cx]==2)
+            fb_put_pixel(x+cx,y+cy, 0xFFFFFF); // fill
+
+  Add fb_get_pixel(x,y) to fb.c.
+
+2D — Mouse API
+  int   mouse_get_x(void);
+  int   mouse_get_y(void);
+  uint8_t mouse_get_btns(void);
+  int   mouse_left(void)  { return mouse_btns & 1; }
+  int   mouse_right(void) { return mouse_btns & 2; }
+  int   mouse_needs_update(void); // check + clear flag
+
+════════════════════════════════════════════════════════
+PHASE 3 — WINDOW MANAGER
+════════════════════════════════════════════════════════
+
+Create kernel/gui/wm.h and kernel/gui/wm.c
+
+3A — Core structures
+  #define WM_MAX_WINDOWS  16
+  #define WM_TITLEBAR_H   32
+  #define WM_BORDER       1
+  #define WM_SHADOW_OFF   4
+  #define WM_SHADOW_COL   0x0A0A14
+  #define WM_BTN_R        7    // close/min/max button radius
+  #define WM_BTN_GAP      22   // spacing between buttons
+
+  typedef enum {
+      WIN_NORMAL, WIN_MINIMIZED, WIN_MAXIMIZED
+  } win_state_t;
+
+  typedef struct window {
+      int x, y, w, h;
+      char title[64];
+      uint32_t *pixels;      // client area pixel buffer
+      int client_w, client_h;
+      win_state_t state;
+      uint8_t focused;
+      uint8_t visible;
+      // Drag state
+      uint8_t dragging;
+      int drag_ox, drag_oy;
+      // Resize state  
+      uint8_t resizing;
+      // Callbacks
+      void (*on_paint)(struct window *win);
+      void (*on_click)(struct window *win, int x, int y, int btn);
+      void (*on_key)(struct window *win, char key);
+      void (*on_close)(struct window *win);
+      // Internal
+      int id;
+      struct window *next;
+  } window_t;
+
+3B — WM functions
+  void      wm_init(void);
+  window_t *wm_new(int x, int y, int w, int h, 
+                   const char *title);
+  void      wm_close(window_t *win);
+  void      wm_focus(window_t *win);
+  void      wm_raise(window_t *win);  // bring to front
+  void      wm_minimize(window_t *win);
+  void      wm_move(window_t *win, int x, int y);
+  void      wm_resize(window_t *win, int w, int h);
+  void      wm_invalidate(window_t *win);  // mark for redraw
+  void      wm_render_all(void);
+  void      wm_handle_mouse(int x, int y, 
+                            int left, int right);
+  void      wm_handle_key(char key);
+  window_t *wm_focused(void);
+  // Draw pixel into window client area:
+  void      wm_put_pixel(window_t *w, int x, int y, 
+                         uint32_t color);
+
+3C — Window rendering (modern clean style)
+  void wm_draw_window(window_t *win):
+
+  // 1. Drop shadow (4px offset, blurred look)
+  fb_fill_rounded_rect(
+      win->x + WM_SHADOW_OFF, win->y + WM_SHADOW_OFF,
+      win->w, win->h, 8, WM_SHADOW_COL);
+
+  // 2. Window border (1px COL_SURFACE1)
+  fb_fill_rounded_rect(win->x-1, win->y-1, 
+      win->w+2, win->h+2, 9, COL_SURFACE1);
+
+  // 3. Title bar (COL_SURFACE0, rounded top corners)
+  fb_fill_rounded_rect(win->x, win->y, 
+      win->w, WM_TITLEBAR_H, 8, COL_SURFACE0);
+
+  // 4. Left accent stripe if focused (3px COL_BLUE)
+  if (win->focused)
+      fb_fill_rect(win->x, win->y+8, 3, 
+                   WM_TITLEBAR_H-16, COL_BLUE);
+
+  // 5. Traffic light buttons (right side of titlebar)
+  int bx = win->x + win->w - WM_BTN_GAP;
+  int by = win->y + WM_TITLEBAR_H/2;
+  fb_fill_circle(bx, by, WM_BTN_R, COL_RED);     // close
+  fb_fill_circle(bx-WM_BTN_GAP, by, WM_BTN_R, COL_YELLOW); // min
+  fb_fill_circle(bx-WM_BTN_GAP*2, by, WM_BTN_R, COL_GREEN); // max
+
+  // 6. Window title (centered in titlebar)
+  int tw = font_str_width(win->title);
+  int tx = win->x + (win->w - tw*8) / 2;
+  int ty = win->y + (WM_TITLEBAR_H - 16) / 2;
+  font_puts(tx, ty, win->title, COL_TEXT, COL_SURFACE0);
+
+  // 7. Client area background
+  fb_fill_rect(win->x, win->y + WM_TITLEBAR_H,
+               win->w, win->h - WM_TITLEBAR_H, COL_MANTLE);
+
+  // 8. Blit client pixel buffer if present
+  if (win->pixels)
+      wm_blit_client(win);
+
+3D — Window interaction hit testing
+  In wm_handle_mouse(x, y, left, right):
+  
+  On left button press:
+    // Check windows front-to-back
+    for each window (front first):
+      // Close button?
+      if point_in_circle(x,y, close_btn_pos, WM_BTN_R):
+          if (win->on_close) win->on_close(win);
+          else wm_close(win);
+          return;
+      // Min button?
+      if point_in_circle(x,y, min_btn_pos, WM_BTN_R):
+          wm_minimize(win); return;
+      // Max button?
+      if point_in_circle(x,y, max_btn_pos, WM_BTN_R):
+          wm_toggle_maximize(win); return;
+      // Title bar → start drag
+      if point_in_rect(x,y, titlebar_rect):
+          wm_raise(win);
+          wm_focus(win);
+          win->dragging = 1;
+          win->drag_ox = x - win->x;
+          win->drag_oy = y - win->y;
+          return;
+      // Client area → dispatch click
+      if point_in_rect(x,y, client_rect):
+          wm_raise(win);
+          wm_focus(win);
+          if (win->on_click)
+              win->on_click(win, 
+                  x - win->x, 
+                  y - win->y - WM_TITLEBAR_H, 
+                  left ? 1 : 2);
+          return;
+
+  On mouse move with left held:
+    if focused_win->dragging:
+        int nx = x - focused_win->drag_ox;
+        int ny = y - focused_win->drag_oy;
+        // Clamp: keep titlebar on screen
+        if (nx < 0) nx = 0;
+        if (ny < 0) ny = 0;
+        if (nx + focused_win->w > fb.width)
+            nx = fb.width - focused_win->w;
+        wm_move(focused_win, nx, ny);
+
+  On left button release:
+    if focused_win->dragging:
+        focused_win->dragging = 0;
+
+  Right click on desktop → show app launcher
+
+════════════════════════════════════════════════════════
+PHASE 4 — DESKTOP + TASKBAR
+════════════════════════════════════════════════════════
+
+4A — Create kernel/gui/desktop.c + desktop.h
+
+  void desktop_draw():
+    // Gradient background: COL_BASE → COL_MANTLE top→bottom
+    for (int y=0; y<fb.height-40; y++) {
+        // Interpolate between COL_BASE and COL_MANTLE
+        uint8_t t = (y * 255) / (fb.height-40);
+        uint32_t c = fb_blend(COL_MANTLE, COL_BASE, t);
+        for (int x=0; x<fb.width; x++)
+            fb_put_pixel(x, y, c);
+    }
+    // Subtle dot grid pattern
+    for (int y=0; y<fb.height-40; y+=32)
+        for (int x=0; x<fb.width; x+=32)
+            fb_put_pixel(x, y, COL_SURFACE0);
+
+    // NexOS watermark bottom-right
+    font_puts2x(fb.width - 130, fb.height - 60,
+                "NexOS 0.1", COL_SURFACE0, 0);
+
+4B — Create kernel/gui/taskbar.c + taskbar.h
+
+  #define TB_H    40   // taskbar height
+  #define TB_Y    (fb.height - TB_H)
+
+  void taskbar_init(void);
+  void taskbar_draw(void);
+  void taskbar_handle_click(int x, int y);
+  void taskbar_update(void);  // update clock etc
+
+  taskbar_draw():
+    // Background bar (slightly transparent look)
+    fb_fill_rect(0, TB_Y, fb.width, TB_H, COL_SURFACE0);
+    // Top border line
+    fb_fill_rect(0, TB_Y, fb.width, 1, COL_SURFACE1);
+
+    // LEFT: App launcher button "⊞ Apps"
+    // Draw rounded rect button
+    fb_fill_rounded_rect(8, TB_Y+6, 80, 28, 6, COL_SURFACE1);
+    font_puts(16, TB_Y+12, "  Apps", COL_BLUE, COL_SURFACE1);
+
+    // CENTER: Window list buttons (one per open window)
+    int bx = 100;
+    for each window in wm:
+        uint32_t btn_col = win->focused ? 
+            COL_SURFACE2 : COL_SURFACE0;
+        fb_fill_rounded_rect(bx, TB_Y+6, 120, 28, 6, btn_col);
+        // Draw truncated title (max 14 chars)
+        char short_title[15];
+        strncpy(short_title, win->title, 14);
+        short_title[14] = 0;
+        font_puts(bx+8, TB_Y+12, short_title, 
+                  COL_TEXT, btn_col);
+        bx += 128;
+
+    // RIGHT: System tray
+    // Clock (HH:MM from RTC)
+    rtc_time_t t; rtc_get_time(&t);
+    char clock_str[6];
+    clock_str[0] = '0' + t.hours/10;
+    clock_str[1] = '0' + t.hours%10;
+    clock_str[2] = ':';
+    clock_str[3] = '0' + t.minutes/10;
+    clock_str[4] = '0' + t.minutes%10;
+    clock_str[5] = 0;
+    font_puts(fb.width-60, TB_Y+12, 
+              clock_str, COL_TEXT, COL_SURFACE0);
+    // Memory indicator
+    char mem_str[16];
+    int free_mb = pmm_get_free_frames()*4/1024;
+    // format: "256MB"
+    font_puts(fb.width-120, TB_Y+12,
+              mem_str, COL_SUBTEXT, COL_SURFACE0);
+
+════════════════════════════════════════════════════════
+PHASE 5 — APP LAUNCHER
+════════════════════════════════════════════════════════
+
+Create kernel/gui/launcher.c + launcher.h
+
+  #define LAUNCHER_W  200
+  #define LAUNCHER_ITEM_H  36
+
+  typedef struct {
+      char label[32];
+      char icon_char;    // single char used as icon
+      uint32_t icon_color;
+      void (*action)(void);
+  } launcher_item_t;
+
+  static launcher_item_t items[] = {
+      {"Terminal",     'T', COL_GREEN,   launch_terminal},
+      {"Files",        'F', COL_BLUE,    launch_filemanager},
+      {"System Info",  'S', COL_MAUVE,   launch_sysinfo},
+      {"Theme",        'C', COL_PEACH,   launch_themewin},
+      {"",             0,   0,           NULL},  // separator
+      {"Restart",      'R', COL_YELLOW,  action_restart},
+      {"Shutdown",     'X', COL_RED,     action_shutdown},
+  };
+
+  static int launcher_visible = 0;
+  static int launcher_x, launcher_y;
+  static int launcher_hover = -1;
+
+  void launcher_show(int x, int y):
+    launcher_x = x;
+    // Clamp so launcher doesn't go off screen
+    int h = ARRAY_LEN(items) * LAUNCHER_ITEM_H + 8;
+    launcher_y = y - h;
+    if (launcher_y < 0) launcher_y = 0;
+    launcher_visible = 1;
+
+  void launcher_hide(void) { launcher_visible = 0; }
+
+  void launcher_draw():
+    if (!launcher_visible) return;
+    int h = ARRAY_LEN(items) * LAUNCHER_ITEM_H + 8;
+    // Background with subtle border
+    fb_fill_rounded_rect(launcher_x, launcher_y, 
+        LAUNCHER_W, h, 10, COL_SURFACE0);
+    fb_draw_rect_outline(launcher_x, launcher_y,
+        LAUNCHER_W, h, COL_SURFACE2, 1);
+    // Items
+    for (int i=0; i < ARRAY_LEN(items); i++) {
+        if (!items[i].label[0]) {
+            // Separator line
+            fb_fill_rect(launcher_x+12, 
+                launcher_y + 4 + i*LAUNCHER_ITEM_H + 14,
+                LAUNCHER_W-24, 1, COL_SURFACE1);
+            continue;
+        }
+        int iy = launcher_y + 4 + i*LAUNCHER_ITEM_H;
+        // Hover highlight
+        if (launcher_hover == i)
+            fb_fill_rounded_rect(launcher_x+4, iy+2,
+                LAUNCHER_W-8, LAUNCHER_ITEM_H-4, 
+                6, COL_SURFACE1);
+        // Icon circle
+        fb_fill_circle(launcher_x+22, iy+18, 
+            10, items[i].icon_color);
+        // Icon letter
+        char ic[2] = {items[i].icon_char, 0};
+        font_puts(launcher_x+18, iy+10, 
+            ic, COL_BASE, items[i].icon_color);
+        // Label
+        font_puts(launcher_x+42, iy+10,
+            items[i].label, COL_TEXT, COL_SURFACE0);
+    }
+
+  void launcher_handle_click(int x, int y):
+    for (int i=0; i<ARRAY_LEN(items); i++) {
+        int iy = launcher_y + 4 + i*LAUNCHER_ITEM_H;
+        if (y >= iy && y < iy+LAUNCHER_ITEM_H) {
+            if (items[i].action) items[i].action();
+            launcher_hide();
+            return;
+        }
+    }
+    launcher_hide();
+
+════════════════════════════════════════════════════════
+PHASE 6 — TERMINAL APP
+════════════════════════════════════════════════════════
+
+Create kernel/gui/term_app.c + term_app.h
+
+  #define TERM_COLS  90
+  #define TERM_ROWS  28
+  #define TERM_PAD    8
+
+  typedef struct {
+      window_t *win;
+      char buf[TERM_ROWS][TERM_COLS+1];
+      int col, row;
+      char input[256];
+      int input_len;
+      uint32_t fg, bg;
+      uint8_t dirty;
+  } term_app_t;
+
+  term_app_t *term_create(int x, int y):
+    window_t *win = wm_new(x, y, 
+        TERM_COLS*8 + TERM_PAD*2,
+        TERM_ROWS*16 + WM_TITLEBAR_H + TERM_PAD*2,
+        "Terminal");
+    win->on_paint = term_paint;
+    win->on_key   = term_key;
+    win->on_close = term_close;
+    // Allocate term state
+    term_app_t *t = kmalloc(sizeof(term_app_t));
+    memset(t, 0, sizeof(term_app_t));
+    t->win = win;
+    t->fg  = COL_TEXT;
+    t->bg  = COL_MANTLE;
+    win->userdata = t;
+    // Print welcome + prompt
+    term_puts(t, "NexOS Terminal\n");
+    term_puts(t, "Type 'help' for commands\n\n");
+    term_prompt(t);
+    return t;
+
+  term_paint(window_t *win):
+    term_app_t *t = win->userdata;
+    // Fill client area
+    fb_fill_rect(win->x, win->y+WM_TITLEBAR_H,
+        win->w, win->h-WM_TITLEBAR_H, t->bg);
+    // Draw each line of buffer
+    for (int r=0; r<TERM_ROWS; r++)
+        font_puts(win->x+TERM_PAD, 
+                  win->y+WM_TITLEBAR_H+TERM_PAD+r*16,
+                  t->buf[r], t->fg, t->bg);
+    // Draw cursor (blinking block)
+    uint64_t tick = timer_get_ticks();
+    if ((tick/500) % 2 == 0) {  // blink every 500ms
+        int cx = win->x + TERM_PAD + t->col*8;
+        int cy = win->y + WM_TITLEBAR_H + TERM_PAD + t->row*16;
+        fb_fill_rect(cx, cy, 8, 16, COL_BLUE);
+    }
+
+  term_key(window_t *win, char key):
+    term_app_t *t = win->userdata;
+    if (key == '\n') {
+        term_newline(t);
+        // Execute command via nsh command dispatch
+        nsh_exec_command(t->input, t);
+        t->input_len = 0;
+        memset(t->input, 0, 256);
+        term_prompt(t);
+    } else if (key == '\b') {
+        if (t->input_len > 0) {
+            t->input[--t->input_len] = 0;
+            // Remove char from display
+            t->col--;
+            if (t->col < 0) t->col = 0;
+            t->buf[t->row][t->col] = ' ';
+        }
+    } else {
+        t->input[t->input_len++] = key;
+        t->buf[t->row][t->col++] = key;
+        if (t->col >= TERM_COLS) {
+            t->col = 0;
+            term_scroll_if_needed(t);
+        }
+    }
+    wm_invalidate(win);
+
+  term_puts(term_app_t *t, const char *s):
+    while (*s) {
+        if (*s == '\n') {
+            t->col = 0;
+            t->row++;
+            term_scroll_if_needed(t);
+        } else {
+            t->buf[t->row][t->col++] = *s;
+        }
+        s++;
+    }
+
+  // Expose nsh output to terminal:
+  // Redirect klog-style output from nsh commands
+  // to the active terminal window instead of console.
+
+  // term_printf(active_term, fmt, ...) for command output.
+  // nsh built-in commands call term_printf instead of printf.
+
+════════════════════════════════════════════════════════
+PHASE 7 — FILE MANAGER APP
+════════════════════════════════════════════════════════
+
+Create kernel/gui/files_app.c + files_app.h
+
+  #define FILES_ITEM_H  28
+  #define FILES_PAD     12
+  #define FILES_ICON_W  24
+
+  typedef struct {
+      window_t *win;
+      char cwd[256];          // current path
+      vfs_node_t *entries[64];
+      int entry_count;
+      int selected;
+      int scroll;
+  } files_app_t;
+
+  files_app_t *files_create(int x, int y):
+    window_t *win = wm_new(x, y, 460, 480, "Files");
+    // ... init, load root dir
+
+  void files_draw(files_app_t *f):
+    // Breadcrumb bar at top of client area
+    fb_fill_rect(win->x, win->y+WM_TITLEBAR_H,
+        win->w, 36, COL_SURFACE0);
+    font_puts(win->x+FILES_PAD, win->y+WM_TITLEBAR_H+10,
+        f->cwd, COL_SUBTEXT, COL_SURFACE0);
+    fb_fill_rect(win->x, win->y+WM_TITLEBAR_H+36,
+        win->w, 1, COL_SURFACE1);
+
+    // File list
+    int list_y = win->y + WM_TITLEBAR_H + 37;
+    for (int i=f->scroll; i<f->entry_count && 
+         list_y < win->y+win->h; i++) {
+        uint32_t bg = (i==f->selected) ? 
+            COL_SURFACE1 : COL_MANTLE;
+        fb_fill_rect(win->x, list_y, win->w, 
+                     FILES_ITEM_H, bg);
+        // Icon: folder=blue rect, file=white rect
+        uint32_t icon_c = (entries[i]->type==VFS_DIR) ?
+            COL_BLUE : COL_SUBTEXT;
+        fb_fill_rounded_rect(win->x+FILES_PAD, 
+            list_y+4, 20, 20, 3, icon_c);
+        // Type letter
+        char type_l[2] = {
+            (entries[i]->type==VFS_DIR)?'D':'F', 0
+        };
+        font_puts(win->x+FILES_PAD+6, list_y+6,
+            type_l, COL_BASE, icon_c);
+        // Filename
+        font_puts(win->x+FILES_PAD+FILES_ICON_W+8, 
+            list_y+6, entries[i]->name, 
+            COL_TEXT, bg);
+        // File size (right aligned)
+        if (entries[i]->type == VFS_FILE) {
+            char sz[16];
+            format_size(entries[i]->length, sz);
+            font_puts(win->x+win->w-60, list_y+6,
+                sz, COL_SUBTEXT, bg);
+        }
+        list_y += FILES_ITEM_H;
+    }
+
+  files_handle_click(files_app_t *f, int x, int y):
+    // Calculate which item was clicked
+    // Single click: select, highlight
+    // Double click: enter dir or cat file in terminal
+
+════════════════════════════════════════════════════════
+PHASE 8 — SYSTEM INFO + THEME APPS
+════════════════════════════════════════════════════════
+
+8A — System Info window (kernel/gui/sysinfo_app.c)
+  Window: 380x420, title "System Information"
+  Sections drawn with labels + values:
+
+  void sysinfo_draw(window_t *win):
+    int y = win->y + WM_TITLEBAR_H + 16;
+    int x = win->x + 20;
+
+    // NexOS logo text
+    font_puts2x(x, y, "NexOS", COL_BLUE, COL_MANTLE);
+    y += 40;
+
+    // Info rows with colored labels
+    draw_info_row(x, y, "Version",  "0.1 Genesis");     y+=28;
+    draw_info_row(x, y, "Arch",     "x86_64");          y+=28;
+    draw_info_row(x, y, "Kernel",   "Custom (NexOS)");  y+=28;
+    draw_info_row(x, y, "Uptime",   get_uptime_str());  y+=28;
+    draw_info_row(x, y, "RAM",      get_ram_str());      y+=28;
+    draw_info_row(x, y, "Heap",     get_heap_str());     y+=28;
+    draw_info_row(x, y, "CPU",      get_cpu_str());      y+=28;
+    
+    y += 8;
+    // RAM usage bar
+    font_puts(x, y, "Memory:", COL_SUBTEXT, COL_MANTLE);
+    y += 20;
+    int used = total_mb - free_mb;
+    int bar_w = (win->w - 40);
+    int fill_w = used * bar_w / total_mb;
+    fb_fill_rounded_rect(x, y, bar_w, 16, 4, COL_SURFACE1);
+    fb_fill_rounded_rect(x, y, fill_w, 16, 4, COL_BLUE);
+    y += 24;
+
+    // Refresh button
+    fb_fill_rounded_rect(x, y, 100, 28, 6, COL_SURFACE1);
+    font_puts(x+28, y+6, "Refresh", COL_TEXT, COL_SURFACE1);
+
+  draw_info_row(x, y, label, value):
+    font_puts(x, y, label, COL_SUBTEXT, COL_MANTLE);
+    font_puts(x+100, y, value, COL_TEXT, COL_MANTLE);
+
+8B — Theme switcher window (kernel/gui/theme_app.c)
+  Window: 320x300, title "Themes"
+
+  4 theme cards, each 260x48px:
+  - Catppuccin Mocha (default) — show 5 palette dots
+  - Nord                        — show 5 palette dots  
+  - Dracula                     — show 5 palette dots
+  - Gruvbox Dark                — show 5 palette dots
+
+  Each card: rounded rect background, theme name,
+  5 colored circles showing the palette,
+  "Active" badge if currently selected.
+
+  Click a card → apply theme to all colors → redraw all.
+
+  Store 4 theme structs with all COL_* values.
+  theme_apply(int id) swaps all COL_* values and 
+  calls wm_render_all().
+
+════════════════════════════════════════════════════════
+PHASE 9 — MAIN GUI LOOP
+════════════════════════════════════════════════════════
+
+Create kernel/gui/gui.c + kernel/gui/gui.h
+
+  void gui_main(void):
+    // 1. Init subsystems
+    mouse_init();
+    wm_init();
+    taskbar_init();
+
+    // 2. Draw initial desktop
+    desktop_draw();
+    taskbar_draw();
+
+    // 3. Open startup windows
+    term_create(60, 60);      // Terminal at top-left area
+    files_create(560, 80);    // Files on the right
+    // sysinfo opens on first launch, then user can close
+
+    // 4. Main event loop (target 30fps)
+    uint64_t last_frame = 0;
+    uint64_t last_clock = 0;
+    uint64_t last_blink = 0;
+    int prev_left = 0, prev_right = 0;
+    int prev_mx = -1, prev_my = -1;
+
+    while (1) {
+        uint64_t now = timer_get_ticks();
+
+        // Keyboard events
+        while (keyboard_available()) {
+            char key = keyboard_getchar();
+            // Global shortcuts
+            if (key == 3) {  // Ctrl+T (ASCII ETX)
+                term_create(80 + (rand()%200), 
+                            80 + (rand()%100));
+            } else {
+                wm_handle_key(key);
+                if (launcher_visible)
+                    launcher_handle_key(key);
+            }
+        }
+
+        // Mouse events
+        int mx = mouse_get_x();
+        int my = mouse_get_y();
+        int left = mouse_left();
+        int right = mouse_right();
+
+        int left_click  = left && !prev_left;
+        int right_click = right && !prev_right;
+        int released    = !left && prev_left;
+
+        if (left_click || right_click || 
+            mx!=prev_mx || my!=prev_my) {
+            // Check launcher first
+            if (launcher_visible && left_click) {
+                launcher_handle_click(mx, my);
+            } else if (right_click) {
+                // Right click on desktop area?
+                if (my < TB_Y)
+                    launcher_show(mx, my);
+            } else {
+                wm_handle_mouse(mx, my, left, right);
+                // Taskbar click
+                if (my >= TB_Y && left_click)
+                    taskbar_handle_click(mx, my);
+            }
+            prev_mx=mx; prev_my=my;
+        }
+        if (released) wm_handle_mouse_release(mx, my);
+        prev_left=left; prev_right=right;
+
+        // Frame render at ~30fps
+        if (now - last_frame >= 33) {
+            last_frame = now;
+            desktop_draw();
+            wm_render_all();
+            taskbar_draw();
+            launcher_draw();
+            cursor_restore();
+            cursor_draw(mx, my);
+        }
+
+        // Clock update every second
+        if (now - last_clock >= 1000) {
+            last_clock = now;
+            taskbar_update();
+        }
+
+        // Yield CPU to avoid busy-loop burning 100%
+        asm volatile("hlt");
+    }
+
+In userspace/init/init.c, replace nsh_main() with:
+  extern void gui_main(void);
+  gui_main();
+
+════════════════════════════════════════════════════════
+PHASE 10 — KEYBOARD SHORTCUTS + POLISH
+════════════════════════════════════════════════════════
+
+10A — Global keyboard shortcuts in gui_main():
+  Ctrl+T → new Terminal window
+  Ctrl+F → new Files window  
+  Ctrl+I → System Info window
+  Ctrl+W → close focused window
+  Ctrl+Q → same as Ctrl+W
+  Escape → close launcher if open
+
+10B — Window animations (simple)
+  When a window opens: start at 90% size, grow to 100%
+  over 5 frames (6ms each). Simple scale effect.
+  When closing: shrink from 100% to 0% over 5 frames.
+  Implement with fb_copy_rect scaling (nearest neighbor).
+
+10C — Notification system
+  Create kernel/gui/notif.c:
+  Show small toast notifications bottom-right:
+    notif_show("NexOS", "Welcome to NexOS 0.1", 3000);
+  Toast: rounded rect, title in COL_BLUE, body in COL_TEXT.
+  Auto-dismiss after ms milliseconds.
+  Queue up to 4 notifications stacked.
+
+10D — Show on-screen keyboard shortcut hints
+  In terminal, print shortcut guide on first launch:
+    "Shortcuts: Ctrl+T=Terminal  Ctrl+F=Files  
+     Right-click=Menu"
+
+════════════════════════════════════════════════════════
+BUILD SYSTEM UPDATES
+════════════════════════════════════════════════════════
+
+Update Makefile — add all new source files:
+  FB_SRCS    = kernel/drivers/fb.c \
+               kernel/drivers/font.c \
+               kernel/drivers/mouse.c \
+               kernel/drivers/console.c
+
+  GUI_SRCS   = kernel/gui/wm.c \
+               kernel/gui/desktop.c \
+               kernel/gui/taskbar.c \
+               kernel/gui/launcher.c \
+               kernel/gui/term_app.c \
+               kernel/gui/files_app.c \
+               kernel/gui/sysinfo_app.c \
+               kernel/gui/theme_app.c \
+               kernel/gui/notif.c \
+               kernel/gui/gui.c
+
+Add to CFLAGS: -I kernel/gui -I kernel/drivers
+
+Update tools/run_qemu.sh:
+  Change: -vga std
+  To:     -vga virtio
+  Add:    -device virtio-mouse-pci (if available)
+  Or use: -device usb-tablet -usb (better mouse in QEMU)
+
+════════════════════════════════════════════════════════
+BUILD ORDER — PHASE BY PHASE
+════════════════════════════════════════════════════════
+
+Phase 1: make clean && make all
+  → Verify FB init message in serial log
+  → Download ISO, boot, confirm colored boot screen
+
+Phase 2: make clean && make all  
+  → Verify "Mouse: PS/2 initialized" in boot log
+
+Phase 3-5: make clean && make all
+  → Verify windows draw, taskbar shows
+
+Phase 6-8: make clean && make all
+  → Verify all 3 apps compile
+
+Phase 9-10: make clean && make all
+  → Full GUI boots, all features work
+
+After all phases:
+  1. Zero compiler errors required
+  2. List all new .c and .h files
+  3. Show gui_main() loop
+  4. Confirm nexos.iso rebuilt
+  5. Expected result when booting in VirtualBox:
+     - Gradient desktop background with dot grid
+     - Bottom taskbar with clock and Apps button
+     - Terminal window open (can type commands)
+     - Files window open (shows filesystem)
+     - Mouse cursor follows PS/2 movement
+     - Right-click shows app launcher
+     - Windows are draggable
+     - 4 themes switchable via Theme app
+     - Ctrl+T opens new terminals

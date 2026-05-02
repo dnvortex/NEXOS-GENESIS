@@ -23,6 +23,17 @@ mb2_header_start:
     dd mb2_header_end - mb2_header_start
     dd 0x100000000 - (MB2_MAGIC + MB2_ARCH + (mb2_header_end - mb2_header_start))
 
+; Framebuffer request tag (type=5) — ask GRUB for 1024x768x32 linear FB
+align 8
+.fb_tag_start:
+    dw 5            ; type  = framebuffer request
+    dw 1            ; flags = optional
+    dd (.fb_tag_end - .fb_tag_start)
+    dd 1024         ; width
+    dd 768          ; height
+    dd 32           ; depth (bpp)
+.fb_tag_end:
+
 ; End tag
 align 8
     dw 0            ; type  = end

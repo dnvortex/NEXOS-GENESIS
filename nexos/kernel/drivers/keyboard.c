@@ -70,13 +70,18 @@ static void kbd_handler(registers_t *regs) {
     if (caps_lock && ch >= 'A' && ch <= 'Z' && shift_down) ch += 32;
 
     if (ch) {
+        /* Encode Ctrl+letter as ASCII control codes 1-26 */
+        if (ctrl_down) {
+            if (ch >= 'a' && ch <= 'z') ch = (char)(ch - 'a' + 1);
+            else if (ch >= 'A' && ch <= 'Z') ch = (char)(ch - 'A' + 1);
+        }
         uint8_t next = (kbd_buf_tail + 1) % KBD_BUF_SIZE;
         if (next != kbd_buf_head) {
             kbd_buf[kbd_buf_tail] = ch;
             kbd_buf_tail = next;
         }
     }
-    UNUSED(ctrl_down); UNUSED(alt_down);
+    UNUSED(alt_down);
 }
 
 void keyboard_init(void) {

@@ -15,6 +15,9 @@ QEMU_ARGS=(
     -serial stdio
     -display ${DISPLAY_MODE}
     -no-reboot
+    -vga virtio
+    -usb
+    -device usb-tablet
 )
 
 # Enable KVM if available

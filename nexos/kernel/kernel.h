@@ -61,6 +61,19 @@ static inline void cli(void) { __asm__ volatile ("cli"); }
 static inline void sti(void) { __asm__ volatile ("sti"); }
 static inline void hlt(void) { __asm__ volatile ("hlt"); }
 
+/* Multiboot2 framebuffer info tag (type 8 in MB2 info structure) */
+typedef struct {
+    uint32_t type;
+    uint32_t size;
+    uint64_t framebuffer_addr;
+    uint32_t framebuffer_pitch;
+    uint32_t framebuffer_width;
+    uint32_t framebuffer_height;
+    uint8_t  framebuffer_bpp;
+    uint8_t  framebuffer_type;   /* 1 = direct RGB */
+    uint16_t reserved;
+} __attribute__((packed)) mb2_tag_fb_t;
+
 /* Utility */
 #define UNUSED(x) ((void)(x))
 #define ALIGN_UP(val, align)   (((val) + (align) - 1) & ~((align) - 1))

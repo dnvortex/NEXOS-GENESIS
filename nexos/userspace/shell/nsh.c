@@ -63,6 +63,10 @@ static int      pipe_read_mode  = 0; /* reading from pipe_buf as stdin */
 static vfs_node_t *redirect_node   = NULL;
 static uint64_t    redirect_offset = 0;
 
+/* GUI terminal output hook — set by term_app before calling nsh_exec_command */
+static void (*g_nsh_char_fn)(char) = 0;
+void nsh_set_output(void (*fn)(char)) { g_nsh_char_fn = fn; }
+
 /* All shell output goes through nsh_putchar — pipe / redirect aware */
 static void nsh_putchar(char c) {
     if (pipe_write_mode) {
@@ -76,6 +80,7 @@ static void nsh_putchar(char c) {
         redirect_offset++;
         return;
     }
+    if (g_nsh_char_fn) { g_nsh_char_fn(c); return; }
     vga_putchar(c);
 }
 
@@ -1438,6 +1443,15 @@ static void nsh_exec_line(char *line) {
 /* ════════════════════════════════════════
  * Main shell loop
  * ════════════════════════════════════════ */
+/* Execute a single command line — for GUI terminal use */
+void nsh_exec_command(const char *cmd) {
+    char buf[1024];
+    int i = 0;
+    while (i < 1023 && cmd[i]) { buf[i] = cmd[i]; i++; }
+    buf[i] = 0;
+    nsh_exec_line(buf);
+}
+
 void nsh_main(void) {
     env_init();
     nsh_source("/etc/nsh.rc");
