@@ -17,6 +17,7 @@
 #include "../../kernel/drivers/rtl8139.h"
 #include "../../kernel/net/icmp.h"
 #include "../../kernel/net/ethernet.h"
+#include "../../kernel/net/netif.h"
 
 /* ════════════════════════════════════════
  * String helpers (no libc)
@@ -959,32 +960,33 @@ static int cmd_ver(int argc, char *argv[]) {
     nsh_print  ("  Built:   "); nsh_print(__DATE__); nsh_print(" "); nsh_println(__TIME__);
     nsh_print  ("  Uptime:  "); nsh_uint_str(timer_get_uptime_seconds(), buf); nsh_print(buf); nsh_println("s");
     nsh_print  ("  Heap:    "); nsh_uint_str(heap_free_space() / 1024, buf); nsh_print(buf); nsh_println(" KB free");
-    nsh_print  ("  NIC:     "); nsh_println(rtl8139_found() ? "RTL8139 UP" : "not present");
+    nsh_print  ("  NIC:     "); nsh_println(netif_is_up() ? "eth0 UP" : "not present");
     return 0;
 }
 
 /* ── ifconfig ────────────────────────────────────────────────────────────── */
 static int cmd_ifconfig(int argc, char *argv[]) {
     (void)argc; (void)argv;
-    if (!rtl8139_found()) { nsh_println("eth0: not present"); return 0; }
-    uint8_t mac[6]; rtl8139_get_mac(mac);
+    netif_t *nif = netif_get_default();
+    if (!nif) { nsh_println("eth0: not present"); return 0; }
     char buf[32];
-    nsh_print("eth0: MAC=");
+    nsh_print(nif->name);
+    nsh_print(" UP  MAC: ");
     for (int i = 0; i < 6; i++) {
-        print_hex_byte(mac[i]);
+        print_hex_byte(nif->mac[i]);
         if (i < 5) nsh_putchar(':');
     }
-    nsh_println("  inet 10.0.2.15  netmask 255.255.255.0  gw 10.0.2.2");
-    nsh_print  ("      RX packets: "); nsh_uint_str(rtl8139_get_rx_count(), buf); nsh_println(buf);
-    nsh_print  ("      TX packets: "); nsh_uint_str(rtl8139_get_tx_count(), buf); nsh_println(buf);
-    nsh_println("      Status: UP  Link: 100Mbps");
+    nsh_println("");
+    nsh_println("     inet 10.0.2.15  netmask 255.255.255.0  gw 10.0.2.2");
+    nsh_print  ("     RX packets: "); nsh_uint_str(rtl8139_get_rx_count(), buf); nsh_println(buf);
+    nsh_print  ("     TX packets: "); nsh_uint_str(rtl8139_get_tx_count(), buf); nsh_println(buf);
     return 0;
 }
 
 /* ── ping ────────────────────────────────────────────────────────────────── */
 static int cmd_ping(int argc, char *argv[]) {
     if (argc < 2) { nsh_println("ping: usage: ping <ip>"); return 1; }
-    if (!rtl8139_found()) { nsh_println("ping: no network interface"); return 1; }
+    if (!netif_is_up()) { nsh_println("ping: no network interface"); return 1; }
 
     uint8_t dst_ip[4];
     if (parse_ip(argv[1], dst_ip) < 0) {

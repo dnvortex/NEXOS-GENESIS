@@ -58,6 +58,7 @@ KERNEL_C_SOURCES = \
     $(KERNEL)/proc/scheduler.c \
     $(KERNEL)/proc/syscall.c \
     $(KERNEL)/net/net.c \
+    $(KERNEL)/net/netif.c \
     $(KERNEL)/net/ethernet.c \
     $(KERNEL)/net/arp.c \
     $(KERNEL)/net/ip.c \

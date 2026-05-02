@@ -8,6 +8,7 @@
 #include "../kernel.h"
 #include "../mm/heap.h"
 #include "../drivers/pci.h"
+#include "../net/netif.h"
 
 /* ── RTL8139 register offsets (from I/O base) ──────────────────────────── */
 #define RTL_MAC0      0x00   /* MAC address bytes 0-5                       */
@@ -156,6 +157,9 @@ int rtl8139_init(void) {
     klog(LOG_INFO, "RTL8139: RX/TX enabled, RX buf at 0x%x (%u KB)",
          (uint32_t)(uintptr_t)rtl_rx_buf, RTL_RX_BUF_SIZE / 1024);
     klog(LOG_INFO, "RTL8139 initialized");
+
+    /* Register as eth0 in the network interface layer */
+    netif_register("eth0", rtl_mac, NETIF_FLAG_UP);
     return 1;
 }
 

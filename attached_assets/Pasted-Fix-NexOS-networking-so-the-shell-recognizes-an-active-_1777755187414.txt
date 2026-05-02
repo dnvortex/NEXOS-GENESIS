@@ -1,0 +1,100 @@
+Fix NexOS networking so the shell recognizes an active network interface.
+
+DO NOT rebuild the networking stack. All drivers (RTL8139, ARP, IP, ICMP) already exist and are working internally.
+
+The problem:
+The shell shows: "ping: no network interface"
+This means the OS does not expose the NIC as a system interface.
+
+════════════════════════════════════
+OBJECTIVE
+════════════════════════════════════
+
+Make the existing RTL8139 NIC appear as an active interface (eth0) so that:
+
+* ping works
+* the OS recognizes networking is available
+
+════════════════════════════════════
+TASK 1 — CREATE NETWORK INTERFACE LAYER
+════════════════════════════════════
+
+Create a simple network interface system:
+
+* A global list of interfaces
+* Each interface has:
+  name (eth0)
+  MAC address
+  status (UP/DOWN)
+
+Functions required:
+
+* register interface
+* mark interface as UP
+* get default interface
+
+════════════════════════════════════
+TASK 2 — CONNECT RTL8139 TO OS
+════════════════════════════════════
+
+Inside rtl8139 initialization:
+
+After MAC address is detected:
+
+* register interface as "eth0"
+* mark it as UP
+
+Log:
+[INFO] Network interface eth0 up
+
+════════════════════════════════════
+TASK 3 — FIX SHELL PING CHECK
+════════════════════════════════════
+
+Modify the ping command logic:
+
+Current behavior:
+
+* prints "no network interface"
+
+New behavior:
+
+* check if at least one interface exists and is UP
+* if yes → allow ping to run
+* if no → show error
+
+════════════════════════════════════
+TASK 4 — ADD BASIC DEBUG COMMAND
+════════════════════════════════════
+
+Add a shell command:
+
+ifconfig
+
+Output example:
+eth0 UP MAC: XX:XX:XX:XX:XX:XX
+
+════════════════════════════════════
+RULES
+════════════════════════════════════
+
+* DO NOT modify ARP, IP, ICMP implementations
+* DO NOT rewrite the driver
+* ONLY connect existing layers
+* Keep changes minimal and clean
+* Ensure logs clearly show interface creation
+
+════════════════════════════════════
+EXPECTED RESULT
+════════════════════════════════════
+
+On boot:
+[INFO] Network interface eth0 up
+
+In shell:
+ping 10.0.2.2 works (no "no network interface" error)
+
+ifconfig shows:
+eth0 UP MAC: XX:XX:XX:XX:XX:XX
+
+Start implementation now.
