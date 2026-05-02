@@ -1,0 +1,231 @@
+Continue building NexOS. The core OS is working but the following items 
+from the original spec are incomplete. Implement each one in order:
+
+════════════════════════════════════════
+TASK 1 — VMM (Virtual Memory Manager)
+════════════════════════════════════════
+Create kernel/mm/vmm.c and kernel/mm/vmm.h
+
+Implement:
+- vmm_map_page(phys_addr, virt_addr, flags) — maps a physical page to a 
+  virtual address in the current PML4 by walking and allocating page table 
+  entries as needed
+- vmm_unmap_page(virt_addr) — removes a mapping and flushes TLB via invlpg
+- vmm_get_physical(virt_addr) — walks the page table and returns the 
+  physical address mapped to a given virtual address, or 0 if not mapped
+- vmm_create_address_space() — allocates a new PML4 table, copies kernel 
+  mappings into the upper half, returns the physical address of the new PML4
+- vmm_switch_address_space(pml4_phys) — writes pml4_phys to CR3
+
+Integrate into kernel.c init sequence between PMM and Heap. Add a klog 
+INFO message on success.
+
+════════════════════════════════════════
+TASK 2 — Ring 3 User Mode Execution
+════════════════════════════════════════
+Verify and fix process.c and scheduler.c so that user-space processes 
+(init and nsh) actually run in CPU privilege ring 3, not ring 0.
+
+Requirements:
+- Each user process must have its own user-mode stack mapped in its virtual 
+  address space (e.g. at 0x00007FFFFFFFE000)
+- The first switch to user mode must use IRET with:
+    * CS = user code segment selector | 3 (RPL=3)
+    * SS = user data segment selector | 3
+    * RFLAGS with IF=1 (interrupts enabled)
+    * RIP pointing to the process entry point
+    * RSP pointing to the user-mode stack top
+- The TSS must hold the kernel RSP0 for each process so syscalls via 
+  INT 0x80 correctly switch to the kernel stack
+- Syscall return must IRET back to ring 3 correctly
+- Test: kernel_main() should log "Dropping to ring 3 — launching init" 
+  just before the first user process switch
+
+════════════════════════════════════════
+TASK 3 — Shell Pipes
+════════════════════════════════════════
+Add pipe support to userspace/shell/nsh.c
+
+Implement: cmd1 | cmd2
+
+- When the shell parser finds a | character, split the command line into 
+  left and right halves
+- Create a pipe: an in-memory circular buffer (2048 bytes) in the shell's 
+  heap, with a read fd and write fd assigned in the fd table
+- Fork left command: redirect its stdout (fd 1) to the write end of the pipe
+- Fork right command: redirect its stdin (fd 0) to the read end of the pipe
+- Shell waits for both child processes to complete before showing the prompt
+- Supported example: cat /etc/motd | cat (at minimum — real piping between 
+  any two commands)
+- Limit: support a single pipe only (no chaining cmd1 | cmd2 | cmd3)
+
+════════════════════════════════════════
+TASK 4 — Shell Output Redirection
+════════════════════════════════════════
+Add output redirection to userspace/shell/nsh.c
+
+Implement: cmd > file  and  cmd >> file
+
+- Parser: after splitting into tokens, check for > or >> tokens
+- > file: open the file with O_CREATE | O_WRONLY | O_TRUNC, dup the fd to 
+  stdout (fd 1) before executing the command
+- >> file: same but open with O_APPEND instead of O_TRUNC
+- After the command finishes, restore original stdout fd
+- Example: echo hello > /home/user/test.txt
+
+════════════════════════════════════════
+TASK 5 — Shell Background Jobs
+════════════════════════════════════════
+Add background execution to userspace/shell/nsh.c
+
+Implement: cmd &
+
+- If the last token is &, remove it and fork the command without waiting 
+  for it to finish
+- Print: [1] <pid> to the terminal after forking
+- Shell immediately returns to the prompt
+- When the background job finishes, the next time the shell reads input, 
+  check for zombie children via sys_wait with WNOHANG flag and print:
+  [1]+  Done    <command>
+
+════════════════════════════════════════
+TASK 6 — Shell Quoted String Arguments
+════════════════════════════════════════
+Fix the nsh tokenizer so that text inside double quotes is treated as a 
+single argument token even if it contains spaces.
+
+- "hello world" → one token: hello world
+- echo "hello world" → prints: hello world
+- Handle escaped quote \" inside a quoted string as a literal quote char
+- Handle unterminated quotes: print error "nsh: unmatched quote" and 
+  don't execute the command
+
+════════════════════════════════════════
+TASK 7 — /proc Virtual Filesystem
+════════════════════════════════════════
+Implement a read-only /proc filesystem backed by VFS.
+
+Create kernel/fs/procfs.c and kernel/fs/procfs.h
+
+Mount at /proc during kernel init (after scheduler is running).
+
+Provide these virtual files:
+- /proc/version     — "NexOS 0.1 built [date]"
+- /proc/uptime      — uptime in seconds (from PIT ticks / 1000)
+- /proc/meminfo     — total physical memory, free pages, heap used/free
+- /proc/<pid>/      — directory per running process
+- /proc/<pid>/status — PID, name, state, parent PID
+
+The shell "ps" command should read from /proc/<pid>/status for its output 
+rather than accessing the PCB table directly.
+
+════════════════════════════════════════
+TASK 8 — Missing Config Files
+════════════════════════════════════════
+Ensure init.c creates these files in ramfs at boot if they don't exist:
+
+- /etc/nexos.conf:
+    hostname=nexos
+    version=0.1
+    default_shell=/bin/nsh
+
+- /etc/passwd:
+    root:x:0:0:root:/root:/bin/nsh
+    user:x:1000:1000:user:/home/user:/bin/nsh
+
+- /etc/motd:
+    Welcome to NexOS 0.1
+    Type 'help' for a list of commands.
+
+════════════════════════════════════════
+TASK 9 — Networking Stubs
+════════════════════════════════════════
+Create kernel/net/ directory with stub files for future networking:
+
+- kernel/net/net.h     — define struct net_interface, struct ip_packet 
+                         (headers only, no implementation)
+- kernel/net/net.c     — net_init() function that logs 
+                         "Network subsystem: not implemented yet"
+- Call net_init() from kernel_main() after PCI enumeration
+- This ensures the directory structure and hook exist for future 
+  network driver work
+
+════════════════════════════════════════
+TASK 10 — README.md
+════════════════════════════════════════
+Create README.md in the project root with:
+
+# NexOS
+
+A custom x86_64 operating system written from scratch in C and Assembly.
+
+## Features
+[List all major features: kernel, drivers, filesystem, shell commands, etc.]
+
+## Prerequisites
+- nasm
+- gcc (x86_64-elf-gcc preferred, system GCC fallback)
+- ld
+- grub-mkrescue
+- xorriso
+- qemu-system-x86_64
+- python3 (for USB installer)
+- make
+
+## Building
+    make all
+
+## Running in QEMU
+    make run
+
+## Debugging with GDB
+    make run-debug
+    # In another terminal:
+    gdb nexos.elf
+    (gdb) target remote :1234
+    (gdb) continue
+
+## Running in VirtualBox
+1. Create new VM: Type = Other, Version = Other/Unknown (64-bit)
+2. RAM: 256MB minimum
+3. No hard disk needed for ISO boot
+4. Mount nexos.iso as optical drive
+5. Settings > System: Enable I/O APIC, disable EFI (use legacy BIOS)
+6. Settings > Network: NAT mode
+7. Boot the VM
+
+## Installing to USB
+    make install-usb
+    # Follow the prompts — type YES to confirm drive wipe
+
+## Architecture Overview
+[ASCII diagram showing: GRUB → kernel_main → subsystem init chain → 
+ scheduler → init (PID1) → nsh]
+
+## Syscall Table
+[Table of all 15 syscalls with number, name, and arguments]
+
+## License
+MIT
+
+════════════════════════════════════════
+AFTER ALL TASKS
+════════════════════════════════════════
+Once all 10 tasks are complete:
+1. Run make clean && make all and confirm zero compiler errors and 
+   zero warnings
+2. Confirm nexos.iso is produced by grub-mkrescue
+3. Run make run and confirm NexOS boots to the nsh shell prompt in QEMU
+4. Test these shell commands in sequence and confirm each works:
+   echo "hello world"
+   ls /etc
+   cat /etc/motd
+   cat /proc/version
+   uname
+   date
+   free
+   ps
+   echo test > /home/user/out.txt
+   cat /home/user/out.txt
+   ls /proc
+5. Print "NexOS build complete. All tasks verified." when done.
