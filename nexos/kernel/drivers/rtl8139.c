@@ -219,10 +219,30 @@ void rtl8139_receive(void) {
         }
 
         uint16_t pkt_len = rxlen - 4; /* strip CRC */
-        uint8_t *pkt     = rtl_rx_buf + offset + 4;
 
-        if (rtl_rx_callback && pkt_len > 0)
-            rtl_rx_callback(pkt, pkt_len);
+        /* Cap pkt_len to max Ethernet frame to guard against corrupt headers */
+        if (pkt_len > 1522) pkt_len = 1522;
+
+        if (rtl_rx_callback && pkt_len > 0) {
+            uint32_t pkt_start = offset + 4;
+            uint32_t pkt_end   = pkt_start + pkt_len;
+
+            if (pkt_end <= RTL_RX_BUF_SIZE) {
+                /* Common path: packet lies entirely within the ring */
+                rtl_rx_callback(rtl_rx_buf + pkt_start, pkt_len);
+            } else {
+                /* Wrap-around path: packet straddles the end of the ring.
+                 * The +16 bytes in RTL_RX_BUF_SIZE only protect the 4-byte
+                 * header — the payload can still wrap.  Reassemble into a
+                 * small bounce buffer so the upper layers see a flat frame. */
+                static uint8_t rtl_bounce[1524];
+                uint16_t first  = (uint16_t)(RTL_RX_BUF_SIZE - pkt_start);
+                uint16_t second = (uint16_t)(pkt_len - first);
+                for (uint16_t i = 0; i < first;  i++) rtl_bounce[i]         = rtl_rx_buf[pkt_start + i];
+                for (uint16_t i = 0; i < second; i++) rtl_bounce[first + i] = rtl_rx_buf[i];
+                rtl_rx_callback(rtl_bounce, pkt_len);
+            }
+        }
 
         rtl_rx_count++;
 

@@ -141,6 +141,8 @@ int tcp_connect(tcp_conn_t *conn, uint32_t ip, uint16_t port) {
     conn->remote_ip   = ip;
     conn->remote_port = port;
     conn->local_port  = tcp_next_port++;
+    /* Wrap ephemeral port range back to 49152 (RFC 6335) */
+    if (tcp_next_port == 0) tcp_next_port = 49152;
     conn->seq         = (uint32_t)(timer_get_ticks() & 0xFFFFFFFFU) | 1U;
     conn->ack         = 0;
     conn->state       = TCP_STATE_SYN_SENT;
@@ -193,16 +195,9 @@ int tcp_recv(tcp_conn_t *conn, uint8_t *buf, uint16_t maxlen,
             conn->rx_len = remaining;
             return (int)n;
         }
-        /* connection closed by remote */
+        /* Remote closed the connection and we have no buffered data — done */
         if (conn->state == TCP_STATE_CLOSE_WAIT
             || conn->state == TCP_STATE_CLOSED) {
-            /* Drain any final data the server sent before FIN */
-            if (conn->rx_len > 0) {
-                uint16_t n = conn->rx_len < maxlen ? conn->rx_len : maxlen;
-                for (uint16_t i = 0; i < n; i++) buf[i] = conn->rx_buf[i];
-                conn->rx_len = 0;
-                return (int)n;
-            }
             return 0;
         }
     }

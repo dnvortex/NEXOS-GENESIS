@@ -83,6 +83,8 @@ void wifi_disconnect(void) {
     wifi_up      = 0;
     wifi_ssid[0] = 0;
     wifi_sig     = 0;
+    /* Mark wlan0 DOWN so netif_is_up() returns the correct state */
+    netif_set_down("wlan0");
     klog(LOG_INFO, "WiFi: disconnected");
 }
 

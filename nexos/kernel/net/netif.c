@@ -15,6 +15,17 @@ static void nif_strcpy(char *d, const char *s, int max) {
 }
 
 int netif_register(const char *name, const uint8_t mac[6], int flags) {
+    /* Update existing entry if the same name is already registered
+     * (e.g. wifi reconnect must not create a duplicate wlan0 entry) */
+    for (int i = 0; i < NETIF_MAX; i++) {
+        if (netif_table[i].valid && nif_strcmp(netif_table[i].name, name) == 0) {
+            for (int j = 0; j < 6; j++) netif_table[i].mac[j] = mac[j];
+            netif_table[i].flags = flags;
+            klog(LOG_INFO, "Network interface %s updated", name);
+            return 0;
+        }
+    }
+    /* Insert into first empty slot */
     for (int i = 0; i < NETIF_MAX; i++) {
         if (!netif_table[i].valid) {
             nif_strcpy(netif_table[i].name, name, NETIF_NAME_LEN);
@@ -33,6 +44,16 @@ void netif_set_up(const char *name) {
     for (int i = 0; i < NETIF_MAX; i++) {
         if (netif_table[i].valid && nif_strcmp(netif_table[i].name, name) == 0) {
             netif_table[i].flags |= NETIF_FLAG_UP;
+            return;
+        }
+    }
+}
+
+void netif_set_down(const char *name) {
+    for (int i = 0; i < NETIF_MAX; i++) {
+        if (netif_table[i].valid && nif_strcmp(netif_table[i].name, name) == 0) {
+            netif_table[i].flags &= ~NETIF_FLAG_UP;
+            klog(LOG_INFO, "Network interface %s down", name);
             return;
         }
     }

@@ -73,7 +73,9 @@ void ip_receive(const uint8_t *data, uint16_t len) {
     uint8_t protocol = data[9];
     if (len < ihl) return;
 
-    /* Update ARP cache with sender */
+    /* Extract source IP for dispatch (ARP cache is already populated by the
+     * Ethernet → ARP layer before we get here; the Ethernet src MAC is not
+     * available at this level so we cannot call arp_cache_set here.) */
     uint32_t src_ip = ((uint32_t)data[12] << 24) | ((uint32_t)data[13] << 16)
                      | ((uint32_t)data[14] <<  8) |  data[15];
 

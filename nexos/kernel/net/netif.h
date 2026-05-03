@@ -21,6 +21,9 @@ int      netif_register(const char *name, const uint8_t mac[6], int flags);
 /* Mark a registered interface UP by name */
 void     netif_set_up(const char *name);
 
+/* Mark a registered interface DOWN by name */
+void     netif_set_down(const char *name);
+
 /* Returns 1 if at least one interface is UP, 0 otherwise */
 int      netif_is_up(void);
 
