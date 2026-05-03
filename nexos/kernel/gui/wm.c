@@ -1,5 +1,6 @@
 /* NexOS — kernel/gui/wm.c | Window Manager | MIT License */
 #include "wm.h"
+#include "anim.h"
 #include "desktop.h"
 #include "../drivers/fb.h"
 #include "../drivers/font.h"
@@ -86,7 +87,7 @@ window_t *wm_new(int x, int y, int w, int h, const char *title) {
     win->visible = 1;
     win->focused = 0;
     win->id      = next_id++;
-    win->anim_frames = 5;
+    win->anim_frames = 8;   /* pop-in over 8 frames (~264 ms at 30 fps) */
     win->orig_x = x; win->orig_y = y;
     win->orig_w = w; win->orig_h = h;
     /* insert at front (top of z-order) */
@@ -180,13 +181,34 @@ void wm_invalidate(window_t *win) { (void)win; /* redrawn every frame */ }
 void wm_render_all(void) {
     /* draw back-to-front */
     for (int i = win_count - 1; i >= 0; i--) {
-        if (wins[i] && wins[i]->visible &&
-            wins[i]->state != WIN_MINIMIZED) {
-            /* simple open animation */
-            if (wins[i]->anim_frames > 0) {
-                wins[i]->anim_frames--;
-            }
-            wm_draw_window(wins[i]);
+        window_t *win = wins[i];
+        if (!win || !win->visible || win->state == WIN_MINIMIZED) continue;
+
+        if (win->anim_frames > 0) {
+            /* Pop-in: window scales from ~72% to 100% using ease-out-back.
+             * progress = (8 - frames) * 32  →  0, 32, 64 … 256 over 8 frames */
+            int progress = (8 - win->anim_frames) * 32;
+            int eased    = anim_ease_out_back(progress);  /* 0-280 with overshoot */
+            /* scale: map eased (0-256) onto 185-256 (72%→100%) */
+            int scale = 185 + eased * 71 / 280;
+            scale = anim_clamp(scale, 64, 256);
+
+            /* Temporarily shrink window geometry for this draw call */
+            int ox = win->x, oy = win->y, ow = win->w, oh = win->h;
+            int dw = ow * (256 - scale) / 512;
+            int dh = oh * (256 - scale) / 512;
+            win->x += dw; win->y += dh;
+            win->w -= dw * 2; win->h -= dh * 2;
+            if (win->w < 4) win->w = 4;
+            if (win->h < 4) win->h = 4;
+
+            wm_draw_window(win);
+
+            /* Restore real geometry */
+            win->x = ox; win->y = oy; win->w = ow; win->h = oh;
+            win->anim_frames--;
+        } else {
+            wm_draw_window(win);
         }
     }
 }

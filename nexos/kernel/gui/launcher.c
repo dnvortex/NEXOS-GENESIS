@@ -1,9 +1,10 @@
-/* NexOS — kernel/gui/launcher.c | Liquid-glass app launcher | MIT License
+/* NexOS — kernel/gui/launcher.c | Liquid-glass app launcher with animations
  *
- * Full-screen overlay with frosted-glass panel, blurred background,
- * 4-column app grid, and translucent power strip.
- */
+ * Open:  panel slides up from below + scrim fades in  (~350 ms, ease-out-cubic)
+ * Close: panel slides back down + scrim fades out      (~220 ms, ease-in-quad)
+ * MIT License */
 #include "launcher.h"
+#include "anim.h"
 #include "wm.h"
 #include "../drivers/fb.h"
 #include "../drivers/font.h"
@@ -24,33 +25,33 @@ static void action_shutdown(void) {
                      ::: "eax", "edx");
 }
 
-/* ── Layout constants ────────────────────────────────────────────────────── */
+/* ── Layout ──────────────────────────────────────────────────────────────── */
 #define PANEL_W     540
 #define PANEL_H     420
-#define PANEL_R     20    /* corner radius */
-#define CARD_COLS   4
+#define PANEL_R      20
+#define CARD_COLS     4
 #define CARD_W      110
 #define CARD_H      112
-#define CARD_R      16
-#define CARD_PAD    16    /* horizontal gap between cards */
-#define GRID_TOP    100   /* panel-relative y of first card row */
-#define ICON_R      30    /* app icon circle radius */
+#define CARD_R       16
+#define CARD_PAD     16
+#define GRID_TOP    100
+#define ICON_R       30
 
-/* ── Colour palette ──────────────────────────────────────────────────────── */
-#define GLASS_SCRIM   0x0A0A18   /* dark navy scrim */
-#define GLASS_PANEL   0x1A1B2E   /* frosted panel base */
-#define GLASS_CARD    0x252645   /* card background */
-#define GLASS_HOVER   0x383970   /* card hover highlight */
-#define GLASS_RIM     0x4A4B7A   /* panel border */
-#define GLASS_HILITE  0x8888CC   /* top specular line */
-#define GLASS_SEP     0x35365A   /* separator line */
-#define GLASS_TITLE   0xCDD6F4   /* title text */
-#define GLASS_HINT    0x6C7086   /* search hint text */
-#define GLASS_SEARCH  0x1E2040   /* search bar background */
-#define POWER_RESTART 0x3B3B6E   /* restart button bg */
-#define POWER_SHUT    0x4A2040   /* shutdown button bg (warm red tint) */
+/* ── Palette ─────────────────────────────────────────────────────────────── */
+#define GLASS_SCRIM   0x0A0A18
+#define GLASS_PANEL   0x1A1B2E
+#define GLASS_CARD    0x252645
+#define GLASS_HOVER   0x383970
+#define GLASS_RIM     0x4A4B7A
+#define GLASS_HILITE  0x8888CC
+#define GLASS_SEP     0x35365A
+#define GLASS_TITLE   0xCDD6F4
+#define GLASS_HINT    0x6C7086
+#define GLASS_SEARCH  0x1E2040
+#define POWER_RESTART 0x3B3B6E
+#define POWER_SHUT    0x4A2040
 
-/* ── App item definition ─────────────────────────────────────────────────── */
+/* ── App table ───────────────────────────────────────────────────────────── */
 typedef struct {
     const char *label;
     char        icon_char;
@@ -59,61 +60,87 @@ typedef struct {
 } app_item_t;
 
 static const app_item_t apps[] = {
-    { "Terminal",   'T', 0xA6E3A1, launch_terminal   },
-    { "Files",      'F', 0x89B4FA, launch_filemanager},
-    { "System",     'S', 0xCBA6F7, launch_sysinfo    },
-    { "Theme",      'C', 0xFAB387, launch_themewin   },
+    { "Terminal",   'T', 0xA6E3A1, launch_terminal    },
+    { "Files",      'F', 0x89B4FA, launch_filemanager },
+    { "System",     'S', 0xCBA6F7, launch_sysinfo     },
+    { "Theme",      'C', 0xFAB387, launch_themewin    },
 };
 #define APP_COUNT  ((int)(sizeof(apps)/sizeof(apps[0])))
 
 /* ── State ───────────────────────────────────────────────────────────────── */
-static int launcher_visible = 0;
+static int launcher_visible = 0;  /* 1 after show(), before real hide */
+static int launcher_closing = 0;  /* 1 while close animation runs */
+static int laun_anim        = 0;  /* 0-256 animation progress */
 static int panel_x, panel_y;
-static int launcher_hover = -1;   /* hovered app index, -1 = none */
+static int launcher_hover = -1;
 static int hover_restart  = 0;
 static int hover_shutdown = 0;
 
-/* ── Helpers ─────────────────────────────────────────────────────────────── */
-static int lstr_len(const char *s) {
-    int n = 0; while (s[n]) n++; return n;
-}
+/* Per-card hover glow (0-256 smooth transition) */
+static int card_glow[APP_COUNT > 0 ? APP_COUNT : 1];
 
-/* Draw centered text inside a rect (uses 8px wide chars from font module) */
-static void draw_centered(int rect_x, int rect_w, int y,
+/* ── Helpers ─────────────────────────────────────────────────────────────── */
+static int lstr_len(const char *s) { int n=0; while(s[n]) n++; return n; }
+
+static void draw_centered(int rx, int rw, int y,
                            const char *s, uint32_t fg, uint32_t bg) {
-    int slen = lstr_len(s) * 8;
-    int tx   = rect_x + (rect_w - slen) / 2;
+    int tx = rx + (rw - lstr_len(s) * 8) / 2;
     font_puts(tx, y, s, fg, bg);
 }
 
-/* Draw a single app card at absolute position (cx=center-x, cy=top-y) */
 static void draw_card(int cx, int cy, int idx, int hovered) {
     int cx0 = cx - CARD_W / 2;
-    uint32_t card_bg = hovered ? GLASS_HOVER : GLASS_CARD;
-
-    /* Card background */
+    /* Smooth hover glow interpolation */
+    uint32_t card_bg = anim_color_lerp(GLASS_CARD, GLASS_HOVER, card_glow[idx]);
     fb_fill_rounded_rect(cx0, cy, CARD_W, CARD_H, CARD_R, card_bg);
 
-    /* Subtle top rim highlight on hover */
+    /* Rim highlight on hover */
     if (hovered)
-        fb_fill_rect(cx0 + CARD_R, cy, CARD_W - 2 * CARD_R, 1, 0x6060A0);
+        fb_fill_rect_blend(cx0 + CARD_R, cy, CARD_W - 2*CARD_R, 1,
+                           0x7070B0, (uint8_t)(card_glow[idx] * 200 / 256));
 
-    /* Icon circle */
+    /* Icon */
     int icon_cy = cy + ICON_R + 14;
     fb_fill_circle(cx, icon_cy, ICON_R, apps[idx].icon_color);
-
-    /* Inner specular: small bright arc at top of circle (1px lighter ring) */
-    uint32_t hi_col = fb_blend(0xFFFFFF, apps[idx].icon_color, 100);
-    fb_fill_circle(cx - 4, icon_cy - 6, ICON_R - 8, hi_col);
+    uint32_t hi = fb_blend(0xFFFFFF, apps[idx].icon_color, 100);
+    fb_fill_circle(cx - 4, icon_cy - 6, ICON_R - 8,  hi);
     fb_fill_circle(cx - 4, icon_cy - 6, ICON_R - 12, apps[idx].icon_color);
-
-    /* Icon letter */
     char ic[2] = { apps[idx].icon_char, 0 };
     font_puts(cx - 4, icon_cy - 5, ic, 0x0D0D1A, apps[idx].icon_color);
 
-    /* Label below icon */
     draw_centered(cx0, CARD_W, cy + CARD_H - 24,
                   apps[idx].label, GLASS_TITLE, card_bg);
+}
+
+/* ── Animation tick ──────────────────────────────────────────────────────── */
+void launcher_tick(uint32_t delta_ms) {
+    /* Update card hover glow */
+    for (int i = 0; i < APP_COUNT; i++) {
+        int target = (launcher_hover == i) ? 256 : 0;
+        int step   = (int)(delta_ms * 256 / 120);   /* ~120 ms full transition */
+        if (card_glow[i] < target)
+            card_glow[i] = anim_clamp(card_glow[i] + step, 0, target);
+        else if (card_glow[i] > target)
+            card_glow[i] = anim_clamp(card_glow[i] - step, target, 256);
+    }
+
+    if (!launcher_visible && !launcher_closing) return;
+
+    if (launcher_closing) {
+        /* Close: ease-in-quad — starts slow, then snaps away */
+        int step = (int)(delta_ms * 256 / 200);  /* ~200 ms close */
+        laun_anim -= step;
+        if (laun_anim <= 0) {
+            laun_anim       = 0;
+            launcher_closing = 0;
+            launcher_visible = 0;
+            fb_scene_dirty   = 1;
+        }
+    } else {
+        /* Open: ease-out-cubic — shoots up then decelerates */
+        int step = (int)(delta_ms * 256 / 350);  /* ~350 ms open */
+        laun_anim = anim_clamp(laun_anim + step, 0, 256);
+    }
 }
 
 /* ── Public API ──────────────────────────────────────────────────────────── */
@@ -123,86 +150,102 @@ void launcher_show(int x, int y) {
     panel_y = ((int)fb.height - PANEL_H) / 2;
     if (panel_y < 4) panel_y = 4;
     launcher_visible = 1;
+    launcher_closing = 0;
+    laun_anim        = 0;   /* start animation from 0 */
     launcher_hover   = -1;
     hover_restart    = 0;
     hover_shutdown   = 0;
+    for (int i = 0; i < APP_COUNT; i++) card_glow[i] = 0;
     fb_scene_dirty   = 1;
 }
 
 void launcher_hide(void) {
-    if (launcher_visible) {
-        launcher_visible = 0;
-        fb_scene_dirty   = 1;
+    if (launcher_visible && !launcher_closing) {
+        launcher_closing = 1;  /* start close animation — tick will finish */
     }
 }
 
-int  launcher_is_visible(void) { return launcher_visible; }
+int launcher_is_visible(void) {
+    return launcher_visible || launcher_closing;
+}
 
 void launcher_draw(void) {
-    if (!launcher_visible) return;
+    if (!launcher_visible && !launcher_closing) return;
 
-    /* ── Step 1: dark scrim over the full desktop area ─────────────────── */
-    int desktop_h = (int)fb.height - 40; /* exclude taskbar */
-    fb_fill_rect_blend(0, 0, (int)fb.width, desktop_h, GLASS_SCRIM, 195);
+    /* ── Animation values ── */
+    int   p_open  = anim_ease_out_cubic(laun_anim);
+    int   p_close = anim_ease_in_quad(laun_anim);
+    int   p       = launcher_closing ? p_close : p_open;
 
-    /* ── Step 2: frosted glass panel ────────────────────────────────────── */
-    /* Blur the background under the panel for the frosted effect */
-    fb_blur_rect(panel_x + 2, panel_y + 2, PANEL_W - 4, PANEL_H - 4, 6);
-    /* Tint the blurred area with the panel glass color */
-    fb_fill_rect_blend(panel_x, panel_y, PANEL_W, PANEL_H, GLASS_PANEL, 210);
-    /* Rounded corners on top of the blend (solid corners) */
-    fb_fill_rounded_rect(panel_x, panel_y, PANEL_W, PANEL_H, PANEL_R, GLASS_PANEL);
+    /* Scrim alpha: 0 → 190 on open, 190 → 0 on close */
+    uint8_t scrim_a = (uint8_t)(190 * p / 256);
 
-    /* ── Step 3: panel rim / border ─────────────────────────────────────── */
-    fb_draw_rect_outline(panel_x, panel_y, PANEL_W, PANEL_H, GLASS_RIM, 1);
-    /* Top specular highlight (1px bright line just inside top border) */
-    fb_fill_rect(panel_x + PANEL_R, panel_y + 1,
+    /* Panel vertical offset: slides up from below */
+    int y_lift = (PANEL_H / 3) * (256 - p) / 256;
+    int py     = panel_y + y_lift;
+
+    /* Panel contents alpha */
+    uint8_t panel_a = (uint8_t)(215 * p / 256);
+    if (panel_a < 4) return;
+
+    /* ── Step 1: scrim ── */
+    int desktop_h = (int)fb.height - 40;
+    if (scrim_a > 2)
+        fb_fill_rect_blend(0, 0, (int)fb.width, desktop_h, GLASS_SCRIM, scrim_a);
+
+    /* ── Step 2: frosted panel ── */
+    if (panel_a > 8) {
+        fb_blur_rect(panel_x + 2, py + 2, PANEL_W - 4, PANEL_H - 4, 6);
+        fb_fill_rect_blend(panel_x, py, PANEL_W, PANEL_H, GLASS_PANEL, panel_a);
+        fb_fill_rounded_rect(panel_x, py, PANEL_W, PANEL_H, PANEL_R, GLASS_PANEL);
+    }
+
+    /* ── Step 3: rim + specular ── */
+    fb_draw_rect_outline(panel_x, py, PANEL_W, PANEL_H, GLASS_RIM, 1);
+    fb_fill_rect(panel_x + PANEL_R, py + 1,
                  PANEL_W - 2 * PANEL_R, 1, GLASS_HILITE);
 
-    /* ── Step 4: title bar ───────────────────────────────────────────────── */
-    int title_y = panel_y + 18;
-    draw_centered(panel_x, PANEL_W, title_y, "NexOS  Apps", GLASS_TITLE, GLASS_PANEL);
+    /* ── Step 4: title ── */
+    draw_centered(panel_x, PANEL_W, py + 18,
+                  "NexOS  Apps", GLASS_TITLE, GLASS_PANEL);
 
-    /* ── Step 5: search bar (decorative) ────────────────────────────────── */
-    int sb_x = panel_x + 20, sb_y = panel_y + 46, sb_w = PANEL_W - 40, sb_h = 28;
+    /* ── Step 5: search bar ── */
+    int sb_x = panel_x + 20, sb_y = py + 46, sb_w = PANEL_W - 40, sb_h = 28;
     fb_fill_rounded_rect(sb_x, sb_y, sb_w, sb_h, 8, GLASS_SEARCH);
     fb_draw_rect_outline(sb_x, sb_y, sb_w, sb_h, GLASS_RIM, 1);
     font_puts(sb_x + 12, sb_y + 8, "  Search apps...", GLASS_HINT, GLASS_SEARCH);
 
-    /* ── Step 6: app grid ────────────────────────────────────────────────── */
-    /* Centre the 4-card row inside the panel */
+    /* ── Step 6: app grid ── */
     int total_w = CARD_COLS * CARD_W + (CARD_COLS - 1) * CARD_PAD;
-    int grid_x0 = panel_x + (PANEL_W - total_w) / 2;   /* left edge of first card */
-    int grid_y  = panel_y + GRID_TOP;
+    int grid_x0 = panel_x + (PANEL_W - total_w) / 2;
+    int grid_y  = py + GRID_TOP;
 
     for (int i = 0; i < APP_COUNT && i < CARD_COLS; i++) {
         int card_cx = grid_x0 + i * (CARD_W + CARD_PAD) + CARD_W / 2;
         draw_card(card_cx, grid_y, i, launcher_hover == i);
     }
-    /* Second row if APP_COUNT > CARD_COLS */
     for (int i = CARD_COLS; i < APP_COUNT; i++) {
-        int col    = i - CARD_COLS;
+        int col     = i - CARD_COLS;
         int card_cx = grid_x0 + col * (CARD_W + CARD_PAD) + CARD_W / 2;
         draw_card(card_cx, grid_y + CARD_H + CARD_PAD, i, launcher_hover == i);
     }
 
-    /* ── Step 7: separator ───────────────────────────────────────────────── */
-    int sep_y = panel_y + GRID_TOP + CARD_H + (APP_COUNT > CARD_COLS ? CARD_H + CARD_PAD : 0) + 16;
+    /* ── Step 7: separator ── */
+    int sep_y = py + GRID_TOP + CARD_H
+              + (APP_COUNT > CARD_COLS ? CARD_H + CARD_PAD : 0) + 16;
     fb_fill_rect(panel_x + 20, sep_y, PANEL_W - 40, 1, GLASS_SEP);
 
-    /* ── Step 8: power buttons ───────────────────────────────────────────── */
+    /* ── Step 8: power buttons ── */
     int pbtn_y  = sep_y + 12;
     int pbtn_w  = 150, pbtn_h = 36, pbtn_r = 10;
-    int pbtn_gx = panel_x + (PANEL_W / 2) - pbtn_w - 8;   /* left btn x */
-    int pbs_x   = panel_x + (PANEL_W / 2) + 8;             /* right btn x */
+    int pbtn_gx = panel_x + (PANEL_W / 2) - pbtn_w - 8;
+    int pbs_x   = panel_x + (PANEL_W / 2) + 8;
 
-    /* Restart */
     uint32_t rb = hover_restart  ? fb_blend(POWER_RESTART, 0xFFFFFF, 40) : POWER_RESTART;
     fb_fill_rounded_rect(pbtn_gx, pbtn_y, pbtn_w, pbtn_h, pbtn_r, rb);
     fb_draw_rect_outline(pbtn_gx, pbtn_y, pbtn_w, pbtn_h, GLASS_RIM, 1);
     draw_centered(pbtn_gx, pbtn_w, pbtn_y + 12, "  Restart", 0xF9E2AF, rb);
 
-    /* Shutdown */
     uint32_t sb2 = hover_shutdown ? fb_blend(POWER_SHUT, 0xFFFFFF, 40) : POWER_SHUT;
     fb_fill_rounded_rect(pbs_x, pbtn_y, pbtn_w, pbtn_h, pbtn_r, sb2);
     fb_draw_rect_outline(pbs_x, pbtn_y, pbtn_w, pbtn_h, GLASS_RIM, 1);
@@ -211,17 +254,16 @@ void launcher_draw(void) {
 
 void launcher_handle_click(int x, int y) {
     if (!launcher_visible) return;
+    int py = panel_y;   /* use resting position for hit-testing */
 
-    /* Click outside panel → close */
     if (x < panel_x || x >= panel_x + PANEL_W ||
-        y < panel_y || y >= panel_y + PANEL_H) {
+        y < py      || y >= py      + PANEL_H) {
         launcher_hide(); return;
     }
 
-    /* App grid hit-test */
     int total_w = CARD_COLS * CARD_W + (CARD_COLS - 1) * CARD_PAD;
     int grid_x0 = panel_x + (PANEL_W - total_w) / 2;
-    int grid_y  = panel_y + GRID_TOP;
+    int grid_y  = py + GRID_TOP;
 
     for (int i = 0; i < APP_COUNT; i++) {
         int row = i / CARD_COLS, col = i % CARD_COLS;
@@ -233,27 +275,22 @@ void launcher_handle_click(int x, int y) {
         }
     }
 
-    /* Power buttons */
-    int sep_y  = panel_y + GRID_TOP + CARD_H + 16;
-    int pbtn_y = sep_y + 12, pbtn_w = 150, pbtn_h = 36;
-    int pbtn_gx = panel_x + (PANEL_W / 2) - pbtn_w - 8;
+    int sep_y  = py + GRID_TOP + CARD_H + 16;
+    int pby    = sep_y + 12, pbw = 150, pbh = 36;
+    int pbtn_gx = panel_x + (PANEL_W / 2) - pbw - 8;
     int pbs_x   = panel_x + (PANEL_W / 2) + 8;
-
-    if (y >= pbtn_y && y < pbtn_y + pbtn_h) {
-        if (x >= pbtn_gx && x < pbtn_gx + pbtn_w) { action_restart();  return; }
-        if (x >= pbs_x   && x < pbs_x   + pbtn_w) { action_shutdown(); return; }
+    if (y >= pby && y < pby + pbh) {
+        if (x >= pbtn_gx && x < pbtn_gx + pbw) { action_restart();  return; }
+        if (x >= pbs_x   && x < pbs_x   + pbw) { action_shutdown(); return; }
     }
-
-    /* Clicked inside panel but hit nothing — dismiss */
     launcher_hide();
 }
 
 void launcher_handle_mouse(int x, int y) {
     if (!launcher_visible) return;
-
-    int prev_hover = launcher_hover;
-    int prev_rest  = hover_restart;
-    int prev_shut  = hover_shutdown;
+    int prev_h   = launcher_hover;
+    int prev_r   = hover_restart;
+    int prev_s   = hover_shutdown;
 
     launcher_hover = -1;
     hover_restart  = 0;
@@ -267,26 +304,24 @@ void launcher_handle_mouse(int x, int y) {
         int row = i / CARD_COLS, col = i % CARD_COLS;
         int cx0 = grid_x0 + col * (CARD_W + CARD_PAD);
         int cy0 = grid_y  + row * (CARD_H + CARD_PAD);
-        if (x >= cx0 && x < cx0 + CARD_W && y >= cy0 && y < cy0 + CARD_H) {
-            launcher_hover = i; break;
-        }
+        if (x >= cx0 && x < cx0 + CARD_W && y >= cy0 && y < cy0 + CARD_H)
+            { launcher_hover = i; break; }
     }
 
     int sep_y  = panel_y + GRID_TOP + CARD_H + 16;
-    int pbtn_y = sep_y + 12, pbtn_w = 150, pbtn_h = 36;
-    int pbtn_gx = panel_x + (PANEL_W / 2) - pbtn_w - 8;
+    int pby    = sep_y + 12, pbw = 150, pbh = 36;
+    int pbtn_gx = panel_x + (PANEL_W / 2) - pbw - 8;
     int pbs_x   = panel_x + (PANEL_W / 2) + 8;
-    if (y >= pbtn_y && y < pbtn_y + pbtn_h) {
-        if (x >= pbtn_gx && x < pbtn_gx + pbtn_w) hover_restart  = 1;
-        if (x >= pbs_x   && x < pbs_x   + pbtn_w) hover_shutdown = 1;
+    if (y >= pby && y < pby + pbh) {
+        if (x >= pbtn_gx && x < pbtn_gx + pbw) hover_restart  = 1;
+        if (x >= pbs_x   && x < pbs_x   + pbw) hover_shutdown = 1;
     }
 
-    if (launcher_hover != prev_hover ||
-        hover_restart  != prev_rest  ||
-        hover_shutdown != prev_shut)
+    if (launcher_hover != prev_h || hover_restart != prev_r ||
+        hover_shutdown != prev_s)
         fb_scene_dirty = 1;
 }
 
 void launcher_handle_key(char key) {
-    if (key == 27) { launcher_hide(); return; } /* Escape */
+    if (key == 27) { launcher_hide(); return; }
 }

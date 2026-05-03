@@ -79,6 +79,7 @@ void gui_main(void) {
     uint64_t last_frame   = 0;
     uint64_t last_clock   = 0;
     uint64_t last_notif   = 0;
+    uint64_t last_aurora  = 0;   /* desktop aurora phase update (~2 s) */
     int      prev_left    = 0;
     int      prev_right   = 0;
     int      prev_mx      = -1;
@@ -147,6 +148,8 @@ void gui_main(void) {
             /* Forward mouse position to launcher for hover highlighting */
             if (launcher_is_visible())
                 launcher_handle_mouse(mx, my);
+            /* Taskbar hover glow — always forward mouse position */
+            taskbar_handle_mouse(mx, my);
             if (launcher_is_visible() && left_click) {
                 launcher_handle_click(mx, my);
             } else if (right_click && my < tb_y) {
@@ -166,12 +169,13 @@ void gui_main(void) {
 
         /* ── Frame render (~30 fps) ─────────────────────────────────────── */
         if (now - last_frame >= 33) {
+            uint32_t frame_ms = (uint32_t)(now - last_frame);
             last_frame = now;
 
-            /* Only repaint the desktop gradient when something changed:
-               window open/close/minimize/maximize, drag end, or theme switch.
-               Skipping this every frame eliminates the full-screen flash that
-               caused the glitch — windows repaint themselves in-place fine. */
+            /* Advance launcher open/close animation */
+            launcher_tick(frame_ms);
+
+            /* Only repaint the desktop gradient when something changed */
             if (fb_scene_dirty) {
                 desktop_draw();
                 fb_scene_dirty = 0;
@@ -195,6 +199,13 @@ void gui_main(void) {
         if (now - last_notif >= 33) {
             notif_tick((uint32_t)(now - last_notif));
             last_notif = now;
+        }
+
+        /* ── Desktop aurora phase + periodic repaint (every ~2 s) ───────── */
+        if (now - last_aurora >= 2000) {
+            desktop_set_phase((uint32_t)(now - last_aurora));
+            last_aurora    = now;
+            fb_scene_dirty = 1;   /* trigger aurora-updated background repaint */
         }
 
         /* Yield CPU */

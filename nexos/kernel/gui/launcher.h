@@ -1,9 +1,11 @@
 /* NexOS — kernel/gui/launcher.h | App launcher menu | MIT License */
 #pragma once
+#include <stdint.h>
 
 void launcher_show(int x, int y);
 void launcher_hide(void);
 void launcher_draw(void);
+void launcher_tick(uint32_t delta_ms);
 void launcher_handle_click(int x, int y);
 void launcher_handle_mouse(int x, int y);
 void launcher_handle_key(char key);
