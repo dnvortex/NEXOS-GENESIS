@@ -96,12 +96,23 @@ void *krealloc(void *ptr, size_t size) {
     return newptr;
 }
 
+/* kmalloc_aligned — returns a pointer aligned to `align` bytes (must be a
+ * power of two).  The original base pointer is stored in the sizeof(void*)
+ * slot immediately before the returned pointer so kfree_aligned() can
+ * recover it.  Never pass an aligned pointer to plain kfree(). */
 void *kmalloc_aligned(size_t size, size_t align) {
-    void *ptr = kmalloc(size + align);
-    if (!ptr) return NULL;
-    uintptr_t addr    = (uintptr_t)ptr;
-    uintptr_t aligned = (addr + align - 1) & ~(align - 1);
+    if (!align || (align & (align - 1))) return NULL; /* must be power-of-2 */
+    void *raw = kmalloc(size + align + sizeof(void *));
+    if (!raw) return NULL;
+    uintptr_t base    = (uintptr_t)raw + sizeof(void *);
+    uintptr_t aligned = (base + align - 1) & ~(align - 1);
+    ((void **)aligned)[-1] = raw;   /* store original pointer for kfree_aligned */
     return (void *)aligned;
+}
+
+void kfree_aligned(void *ptr) {
+    if (!ptr) return;
+    kfree(((void **)ptr)[-1]);
 }
 
 size_t heap_free_space(void) {

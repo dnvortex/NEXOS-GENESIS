@@ -31,12 +31,22 @@ static int slen(const char *s){int n=0;while(s[n])n++;return n;}
 
 /* ── Food placement ──────────────────────────────────────────────────────── */
 static void place_food(snake_app_t *g) {
+    /* If the snake fills the entire grid the player wins — no food to place */
+    if (g->body_len >= SN_W * SN_H) { g->game_over = 1; return; }
     int tries = 0;
     do {
         g->food_x = sn_rand(g, SN_W);
         g->food_y = sn_rand(g, SN_H);
         tries++;
-    } while (g->grid[g->food_y][g->food_x] && tries < 2000);
+    } while (g->grid[g->food_y][g->food_x] && tries < SN_W * SN_H * 4);
+    /* Fallback: linear scan to guarantee we always find an empty cell */
+    if (g->grid[g->food_y][g->food_x]) {
+        for (int fy = 0; fy < SN_H; fy++) {
+            for (int fx = 0; fx < SN_W; fx++) {
+                if (!g->grid[fy][fx]) { g->food_x = fx; g->food_y = fy; return; }
+            }
+        }
+    }
 }
 
 /* ── Init / reset ────────────────────────────────────────────────────────── */

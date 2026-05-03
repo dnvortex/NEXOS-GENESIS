@@ -77,7 +77,9 @@ static void edit_load(edit_app_t *e, const char *path) {
         off += n;
         if (n < sizeof(buf)-1) break;
     }
-    /* finish last line */
+    /* finish last line — clamp row to prevent OOB write when file exactly
+     * fills the buffer and the final newline pushed row == EDIT_MAX_LINES */
+    if (row >= EDIT_MAX_LINES) { row = EDIT_MAX_LINES - 1; }
     e->lines[row][col] = 0;
     e->line_len[row] = col;
     if (row+1 > e->num_lines) e->num_lines = row+1;

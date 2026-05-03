@@ -23,13 +23,16 @@ static int triwave(int t, int period, int phase) {
     else            return 255 - (pos - half) * 255 / half;
 }
 
-/* Heat-map color: cold=blue, warm=cyan/green, hot=yellow/red */
+/* Heat-map color: cold=blue, warm=cyan/green, hot=yellow/red
+ * Input is clamped to 0-255 to prevent uint32_t wrap on out-of-range values */
 static uint32_t heat_color(int v) {
+    if (v <   0) v =   0;
+    if (v > 255) v = 255;
     uint32_t r, g, b;
     if (v < 64)       { r=0;   g=0;          b=(uint32_t)(128+v); }
     else if (v < 128) { r=0;   g=(uint32_t)((v-64)*4); b=192; }
     else if (v < 192) { int d=v-128; r=(uint32_t)(d*4); g=255; b=(uint32_t)(192-d*3); }
-    else              { int d=v-192; r=255; g=(uint32_t)(255-d*4); b=0; }
+    else              { int d=v-192; r=255; g=(uint32_t)(255-d*4 < 0 ? 0 : 255-d*4); b=0; }
     return (r<<16)|(g<<8)|b;
 }
 
@@ -89,7 +92,7 @@ static void viz_paint(window_t *win) {
     uint32_t fr = v->frame % 10000;
     { char t[8]; int ti=0;
       if (!fr){t[ti++]='0';}else while(fr){t[ti++]='0'+fr%10;fr/=10;}
-      while(ti>0) fbuf[fi++]=t[--ti]; fbuf[fi]=0; }
+      while(ti>0){ fbuf[fi++]=t[--ti]; } fbuf[fi]=0; }
     font_puts(wx+WIN_W-fi*8-8, wy+10, fbuf, COL_OVERLAY0, COL_SURFACE0);
 
     /* ── Waveform area ── */

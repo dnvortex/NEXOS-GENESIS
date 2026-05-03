@@ -59,7 +59,8 @@ static void draw_sparkline(int sx, int sy, int sw, int sh,
     int step = (sw > hlen) ? sw / hlen : 1;
     int x = sx;
     for (int i = 0; i < hlen; i++) {
-        int idx = (pos - hlen + i + SYSMON_HISTORY) % SYSMON_HISTORY;
+        /* Use hlen (not SYSMON_HISTORY) so this works for any ring size */
+        int idx = (pos + i) % hlen;
         int hv  = (int)hist[idx] * sh / 100;
         if (hv < 0) hv = 0;
         if (hv > sh) hv = sh;
@@ -110,7 +111,7 @@ static void sysmon_paint(window_t *win) {
         m->last_update = now;
 
         uint64_t heap_free  = heap_free_space();
-        uint64_t heap_total = 8ULL * 1024 * 1024;  /* 8 MB heap */
+        uint64_t heap_total = HEAP_SIZE;
         uint64_t heap_used  = (heap_total > heap_free) ? heap_total - heap_free : 0;
         int heap_pct = (int)(heap_used * 100 / (heap_total ? heap_total : 1));
         m->heap_hist[m->hist_pos] = (uint8_t)heap_pct;
@@ -155,7 +156,7 @@ static void sysmon_paint(window_t *win) {
     y += 28;
     {
         uint64_t heap_free  = heap_free_space();
-        uint64_t heap_total = 8ULL * 1024 * 1024;
+        uint64_t heap_total = HEAP_SIZE;
         uint64_t heap_used  = (heap_total > heap_free) ? heap_total - heap_free : 0;
         int pct = (int)(heap_used * 100 / (heap_total ? heap_total : 1));
 

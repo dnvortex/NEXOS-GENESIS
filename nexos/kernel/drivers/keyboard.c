@@ -58,6 +58,10 @@ static void kbd_handler(registers_t *regs) {
     /* Extended key dispatch (arrow keys, Delete, Home, End, PgUp, PgDn) */
     if (kbd_extended) {
         kbd_extended = 0;
+        /* Right Ctrl / Right Alt update modifier state just like their left
+         * counterparts — must be checked on both press AND release */
+        if (sc == 0x1D) { ctrl_down = !released; return; } /* Right Ctrl */
+        if (sc == 0x38) { alt_down  = !released; return; } /* Right Alt  */
         if (!released) {
             char ext_ch = 0;
             switch (sc) {

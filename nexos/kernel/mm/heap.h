@@ -20,6 +20,7 @@ void  *kmalloc(size_t size);
 void   kfree(void *ptr);
 void  *krealloc(void *ptr, size_t size);
 void  *kmalloc_aligned(size_t size, size_t align);
+void   kfree_aligned(void *ptr);   /* must be used to free kmalloc_aligned() results */
 size_t heap_free_space(void);   /* walk free-list, return total free bytes */
 
 #endif
