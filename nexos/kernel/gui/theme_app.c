@@ -59,52 +59,90 @@ void theme_apply(int id) {
     if (id < 0 || id >= THEME_COUNT) return;
     g_active_theme = id;
     const theme_def_t *th = &g_themes[id];
-    col_base     = th->base;
-    col_mantle   = th->mantle;
-    col_crust    = th->crust;
-    col_surface0 = th->surface0;
-    col_surface1 = th->surface1;
-    col_surface2 = th->surface2;
-    col_overlay0 = th->overlay0;
-    col_text     = th->text;
-    col_subtext  = th->subtext;
-    col_blue     = th->blue;
-    col_lavender = th->lavender;
-    col_mauve    = th->mauve;
-    col_red      = th->red;
-    col_peach    = th->peach;
-    col_yellow   = th->yellow;
-    col_green    = th->green;
-    col_teal     = th->teal;
-    col_sky      = th->sky;
-    fb_scene_dirty = 1;   /* full repaint with new palette */
+    col_base     = th->base;     col_mantle   = th->mantle;
+    col_crust    = th->crust;    col_surface0 = th->surface0;
+    col_surface1 = th->surface1; col_surface2 = th->surface2;
+    col_overlay0 = th->overlay0; col_text     = th->text;
+    col_subtext  = th->subtext;  col_blue     = th->blue;
+    col_lavender = th->lavender; col_mauve    = th->mauve;
+    col_red      = th->red;      col_peach    = th->peach;
+    col_yellow   = th->yellow;   col_green    = th->green;
+    col_teal     = th->teal;     col_sky      = th->sky;
+    fb_scene_dirty = 1;
 }
 
 static void theme_paint(window_t *win) {
     int wx = win->x, wy = win->y + WM_TITLEBAR_H;
-    fb_fill_rect(wx, wy, win->w, win->h - WM_TITLEBAR_H, COL_MANTLE);
+    int ww = win->w;
+    fb_fill_rect(wx, wy, ww, win->h - WM_TITLEBAR_H, COL_MANTLE);
 
-    int cy = wy + 12;
+    /* Header */
+    fb_fill_rect(wx, wy, ww, 36, COL_SURFACE0);
+    fb_fill_rect(wx, wy, 4, 36, COL_MAUVE);
+    fb_fill_rect_blend(wx, wy, ww, 1, 0xFFFFFF, 18);
+    font_puts(wx + 14, wy + 10, "Choose a theme", COL_TEXT, COL_SURFACE0);
+    fb_fill_rect(wx, wy + 36, ww, 1, COL_SURFACE1);
+
+    int cy = wy + 44;
+    int card_w = ww - 24;
+
     for (int i = 0; i < THEME_COUNT; i++) {
         const theme_def_t *th = &g_themes[i];
-        uint32_t card_bg = (i == g_active_theme) ? COL_SURFACE1 : COL_SURFACE0;
-        fb_fill_rounded_rect(wx + 16, cy, 268, 52, 8, card_bg);
-        if (i == g_active_theme) {
-            fb_draw_rect_outline(wx + 16, cy, 268, 52, COL_BLUE, 2);
-            font_puts(wx + 16 + 268 - 56, cy + 18, "Active", COL_BLUE, card_bg);
+        int active   = (i == g_active_theme);
+        int card_h   = 72;
+        uint32_t cbg = active ? COL_SURFACE1 : COL_SURFACE0;
+
+        /* Card background */
+        fb_fill_rounded_rect(wx + 12, cy, card_w, card_h, 10, cbg);
+
+        /* Active: blue outline + specular top rim */
+        if (active) {
+            fb_draw_rect_outline(wx + 12, cy, card_w, card_h, COL_BLUE, 2);
+            fb_fill_rect_blend(wx + 14, cy + 1, card_w - 4, 1, 0xFFFFFF, 20);
         }
-        font_puts(wx + 24, cy + 8, th->name, COL_TEXT, card_bg);
-        for (int d = 0; d < 5; d++) {
-            fb_fill_circle(wx + 24 + d * 22, cy + 36, 8, th->dot[d]);
+
+        /* Left accent bar — theme's signature accent color */
+        fb_fill_rounded_rect(wx + 12, cy, 4, card_h, 4, th->blue);
+
+        /* Theme name */
+        font_puts(wx + 24, cy + 10, th->name,
+                  active ? COL_TEXT : COL_SUBTEXT, cbg);
+
+        /* Active badge */
+        if (active) {
+            int bw = 52, bx2 = wx + 12 + card_w - bw - 8;
+            fb_fill_rounded_rect(bx2, cy + 8, bw, 18, 6, COL_BLUE);
+            font_puts(bx2 + 8, cy + 12, "Active", COL_BASE, COL_BLUE);
         }
-        cy += 60;
+
+        /* 8-color full-width palette strip */
+        uint32_t sw[8] = {
+            th->red, th->peach, th->yellow, th->green,
+            th->teal, th->sky, th->blue, th->mauve
+        };
+        int sx0   = wx + 24;
+        int sw_w  = card_w - 30;       /* total strip width */
+        int sw_ea = sw_w / 8;          /* each swatch */
+        int sy    = cy + 34;
+
+        for (int s = 0; s < 8; s++) {
+            int sx = sx0 + s * sw_ea;
+            fb_fill_rounded_rect(sx, sy, sw_ea - 2, 20,
+                                 (s == 0 || s == 7) ? 4 : 0, sw[s]);
+        }
+        /* Specular shimmer on strip */
+        fb_fill_rect_blend(sx0, sy, sw_w - 2, 9, 0xFFFFFF, 22);
+
+        cy += card_h + 8;
     }
 }
 
 static void theme_click(window_t *win, int cx, int cy, int btn) {
     (void)cx; (void)btn;
-    int rel_y = cy - 12;
-    int idx = rel_y / 60;
+    /* offset from client area top, skip header */
+    int rel_y = cy - 44;
+    if (rel_y < 0) return;
+    int idx = rel_y / 80;   /* card_h(72) + gap(8) = 80 */
     if (idx >= 0 && idx < THEME_COUNT) theme_apply(idx);
     wm_invalidate(win);
 }
@@ -112,7 +150,7 @@ static void theme_click(window_t *win, int cx, int cy, int btn) {
 static void theme_close(window_t *win) { wm_close(win); }
 
 window_t *theme_create(int x, int y) {
-    window_t *win = wm_new(x, y, 300, 300, "Themes");
+    window_t *win = wm_new(x, y, 310, 420, "Themes");
     if (!win) return NULL;
     win->on_paint = theme_paint;
     win->on_click = theme_click;

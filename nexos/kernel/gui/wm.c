@@ -37,32 +37,73 @@ static int point_in_circle(int px, int py, int cx, int cy, int r) {
 static void wm_draw_window(window_t *win) {
     if (!win->visible || win->state == WIN_MINIMIZED) return;
 
-    /* shadow */
-    fb_fill_rounded_rect(win->x + WM_SHADOW_OFF, win->y + WM_SHADOW_OFF,
-                         win->w, win->h, 8, WM_SHADOW_COL);
-    /* border */
+    /* ── 3-layer graduated drop shadow ─────────────────────────────────── */
+    fb_fill_rect_blend(win->x + 10, win->y + 10, win->w, win->h, 0x000000, 55);
+    fb_fill_rect_blend(win->x +  6, win->y +  6, win->w, win->h, 0x000000, 35);
+    fb_fill_rect_blend(win->x +  2, win->y +  2, win->w, win->h, 0x000000, 16);
+
+    /* ── Focus outer glow ring ──────────────────────────────────────────── */
+    if (win->focused) {
+        fb_fill_rect_blend(win->x - 3, win->y - 3,
+                           win->w + 6, win->h + 6, COL_BLUE, 26);
+        fb_fill_rect_blend(win->x - 1, win->y - 1,
+                           win->w + 2, win->h + 2, COL_BLUE, 50);
+    }
+
+    /* ── Window frame ───────────────────────────────────────────────────── */
+    uint32_t frame_c = win->focused ? COL_SURFACE2 : COL_SURFACE1;
     fb_fill_rounded_rect(win->x - 1, win->y - 1,
-                         win->w + 2, win->h + 2, 9, COL_SURFACE1);
-    /* titlebar */
-    fb_fill_rounded_rect(win->x, win->y, win->w, WM_TITLEBAR_H, 8, COL_SURFACE0);
-    /* focus accent stripe */
-    if (win->focused)
+                         win->w + 2, win->h + 2, 10, frame_c);
+
+    /* ── Titlebar base ──────────────────────────────────────────────────── */
+    uint32_t tb_col = win->focused ? 0x24253E : 0x1C1D30;
+    fb_fill_rounded_rect(win->x, win->y, win->w, WM_TITLEBAR_H, 8, tb_col);
+
+    /* Specular — bright overlay on upper half + single top-rim pixel */
+    fb_fill_rect_blend(win->x + 8,  win->y,
+                       win->w - 16, WM_TITLEBAR_H / 2 + 2, 0xFFFFFF, 8);
+    fb_fill_rect_blend(win->x + 10, win->y, win->w - 20, 1, 0xFFFFFF, 34);
+
+    /* ── Focus left accent stripe + soft glow ───────────────────────────── */
+    if (win->focused) {
+        fb_fill_rect_blend(win->x, win->y + 8,
+                           5, WM_TITLEBAR_H - 16, COL_BLUE, 40);
         fb_fill_rect(win->x, win->y + 8, 3, WM_TITLEBAR_H - 16, COL_BLUE);
-    /* traffic-light buttons */
+    }
+
+    /* ── Traffic-light buttons with shadow + specular ───────────────────── */
     int bx = win->x + win->w - WM_BTN_GAP;
     int by = win->y + WM_TITLEBAR_H / 2;
-    fb_fill_circle(bx,               by, WM_BTN_R, COL_RED);
-    fb_fill_circle(bx - WM_BTN_GAP,  by, WM_BTN_R, COL_YELLOW);
-    fb_fill_circle(bx - WM_BTN_GAP * 2, by, WM_BTN_R, COL_GREEN);
-    /* title */
+
+    /* per-button drop shadow */
+    fb_fill_circle(bx + 1,               by + 1, WM_BTN_R, 0x000000);
+    fb_fill_circle(bx - WM_BTN_GAP + 1,  by + 1, WM_BTN_R, 0x000000);
+    fb_fill_circle(bx - WM_BTN_GAP*2+1,  by + 1, WM_BTN_R, 0x000000);
+
+    fb_fill_circle(bx,                   by, WM_BTN_R, COL_RED);
+    fb_fill_circle(bx - WM_BTN_GAP,      by, WM_BTN_R, COL_YELLOW);
+    fb_fill_circle(bx - WM_BTN_GAP * 2,  by, WM_BTN_R, COL_GREEN);
+
+    /* specular highlight: small bright dot top-left of each button */
+    fb_fill_circle(bx - 2,                   by - 2, 2,
+                   fb_blend(0xFFFFFF, COL_RED,    160));
+    fb_fill_circle(bx - WM_BTN_GAP - 2,      by - 2, 2,
+                   fb_blend(0xFFFFFF, COL_YELLOW, 160));
+    fb_fill_circle(bx - WM_BTN_GAP * 2 - 2,  by - 2, 2,
+                   fb_blend(0xFFFFFF, COL_GREEN,  160));
+
+    /* ── Title centered in titlebar ─────────────────────────────────────── */
     int tw = font_str_width(win->title);
     int tx = win->x + (win->w - tw * 8) / 2;
     int ty = win->y + (WM_TITLEBAR_H - 16) / 2;
-    font_puts(tx, ty, win->title, COL_TEXT, COL_SURFACE0);
-    /* client area */
+    font_puts(tx, ty, win->title, COL_TEXT, tb_col);
+
+    /* ── Client area ────────────────────────────────────────────────────── */
     fb_fill_rect(win->x, win->y + WM_TITLEBAR_H,
                  win->w, win->h - WM_TITLEBAR_H, COL_MANTLE);
-    /* invoke paint callback */
+    /* Hairline separator between titlebar and content */
+    fb_fill_rect(win->x, win->y + WM_TITLEBAR_H, win->w, 1, COL_SURFACE1);
+
     if (win->on_paint) win->on_paint(win);
 }
 
