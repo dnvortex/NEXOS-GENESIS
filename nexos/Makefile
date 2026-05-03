@@ -87,6 +87,10 @@ KERNEL_C_SOURCES = \
     $(KERNEL)/gui/browser_app.c \
     $(KERNEL)/gui/calc_app.c \
     $(KERNEL)/gui/clock_app.c \
+    $(KERNEL)/gui/edit_app.c \
+    $(KERNEL)/gui/viz_app.c \
+    $(KERNEL)/gui/snake_app.c \
+    $(KERNEL)/gui/sysmon_app.c \
     $(KERNEL)/gui/gui.c \
     $(KERNEL)/installer/installer.c \
     $(KERNEL)/pkg/npkg.c \

@@ -12,6 +12,10 @@
 #include "browser_app.h"
 #include "calc_app.h"
 #include "clock_app.h"
+#include "edit_app.h"
+#include "viz_app.h"
+#include "snake_app.h"
+#include "sysmon_app.h"
 #include "../drivers/fb.h"
 #include "../drivers/font.h"
 #include "../drivers/mouse.h"
@@ -67,6 +71,38 @@ void launch_clock(void) {
     int oy = 260 + (kc % 3) * 16;
     clock_create(ox, oy);
     kc++;
+}
+
+void launch_editor(void) {
+    static int ec = 0;
+    int ox = 80 + (ec % 5) * 22;
+    int oy = 60 + (ec % 5) * 22;
+    edit_create(ox, oy, NULL);
+    ec++;
+}
+
+void launch_visualizer(void) {
+    static int vc = 0;
+    int ox = 180 + (vc % 4) * 18;
+    int oy = 80  + (vc % 4) * 18;
+    viz_create(ox, oy);
+    vc++;
+}
+
+void launch_snake(void) {
+    static int sc = 0;
+    int ox = 160 + (sc % 4) * 18;
+    int oy = 80  + (sc % 4) * 18;
+    snake_create(ox, oy);
+    sc++;
+}
+
+void launch_sysmon(void) {
+    static int mc = 0;
+    int ox = 120 + (mc % 4) * 16;
+    int oy = 70  + (mc % 4) * 16;
+    sysmon_create(ox, oy);
+    mc++;
 }
 
 /* ── Simple pseudo-random for window placement ─────────────────────────── */

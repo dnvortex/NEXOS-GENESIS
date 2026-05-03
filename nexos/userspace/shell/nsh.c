@@ -1485,10 +1485,43 @@ static int nsh_exec_builtin(int argc, char *argv[]) {
     if (nsh_strcmp(cmd,"wifi")==0)     return cmd_wifi(argc,argv);
     if (nsh_strcmp(cmd,"npkg")==0)     return cmd_npkg(argc,argv);
 
-    /* ── PATH-based script lookup: /usr/bin/<cmd> or /usr/bin/<cmd>.sh ── */
+    /* ── GUI application launchers (kernel-level, framebuffer) ── */
+    {
+        extern void launch_editor(void);
+        extern void launch_visualizer(void);
+        extern void launch_snake(void);
+        extern void launch_sysmon(void);
+        extern void launch_browser(void);
+        extern void launch_calc(void);
+        extern void launch_clock(void);
+        extern void launch_terminal(void);
+        extern void launch_filemanager(void);
+        extern void launch_sysinfo(void);
+        if (nsh_strcmp(cmd,"edit")==0  || nsh_strcmp(cmd,"nano")==0 ||
+            nsh_strcmp(cmd,"vi")==0)   { launch_editor();     return 0; }
+        if (nsh_strcmp(cmd,"viz")==0   || nsh_strcmp(cmd,"visualizer")==0)
+                                       { launch_visualizer(); return 0; }
+        if (nsh_strcmp(cmd,"snake")==0){ launch_snake();      return 0; }
+        if (nsh_strcmp(cmd,"sysmon")==0|| nsh_strcmp(cmd,"htop")==0)
+                                       { launch_sysmon();     return 0; }
+        if (nsh_strcmp(cmd,"browser")==0||nsh_strcmp(cmd,"www")==0)
+                                       { launch_browser();    return 0; }
+        if (nsh_strcmp(cmd,"calc")==0) { launch_calc();       return 0; }
+        if (nsh_strcmp(cmd,"clock")==0){ launch_clock();      return 0; }
+        if (nsh_strcmp(cmd,"files")==0 || nsh_strcmp(cmd,"fm")==0)
+                                       { launch_filemanager();return 0; }
+        if (nsh_strcmp(cmd,"sysinfo")==0)
+                                       { launch_sysinfo();    return 0; }
+    }
+
+    /* ── PATH-based script lookup: /bin, /usr/bin ── */
     {
         char spath[512];
-        /* try /usr/bin/<cmd> first */
+        /* try /bin/<cmd> first */
+        nsh_strcpy(spath, "/bin/", 512);
+        nsh_strcat(spath, cmd, 512);
+        if (!nsh_run_script(spath, argc, argv)) return 0;
+        /* try /usr/bin/<cmd> */
         nsh_strcpy(spath, "/usr/bin/", 512);
         nsh_strcat(spath, cmd, 512);
         if (!nsh_run_script(spath, argc, argv)) return 0;

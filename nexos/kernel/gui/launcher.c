@@ -19,6 +19,10 @@ void launch_themewin(void);
 void launch_browser(void);
 void launch_calc(void);
 void launch_clock(void);
+void launch_editor(void);
+void launch_visualizer(void);
+void launch_snake(void);
+void launch_sysmon(void);
 
 static void action_restart(void) {
     __asm__ volatile("mov $0xFE, %%al\n out %%al, $0x64\n" ::: "eax");
@@ -30,7 +34,7 @@ static void action_shutdown(void) {
 
 /* ── Layout ──────────────────────────────────────────────────────────────── */
 #define PANEL_W     540
-#define PANEL_H     420
+#define PANEL_H     580
 #define PANEL_R      20
 #define CARD_COLS     4
 #define CARD_W      110
@@ -70,6 +74,10 @@ static const app_item_t apps[] = {
     { "Browser",    'W', 0x74C7EC, launch_browser     },
     { "Calc",       '+', 0xF9E2AF, launch_calc        },
     { "Clock",      'O', 0x94E2D5, launch_clock       },
+    { "Editor",     'E', 0x89DCEB, launch_editor      },
+    { "Visualizer", 'V', 0xF38BA8, launch_visualizer  },
+    { "Snake",      'G', 0xA6E3A1, launch_snake       },
+    { "Monitor",    'M', 0xCBA6F7, launch_sysmon      },
 };
 #define APP_COUNT  ((int)(sizeof(apps)/sizeof(apps[0])))
 
@@ -237,8 +245,8 @@ void launcher_draw(void) {
     }
 
     /* ── Step 7: separator ── */
-    int sep_y = py + GRID_TOP + CARD_H
-              + (APP_COUNT > CARD_COLS ? CARD_H + CARD_PAD : 0) + 16;
+    int rows  = (APP_COUNT + CARD_COLS - 1) / CARD_COLS;
+    int sep_y = py + GRID_TOP + rows * (CARD_H + CARD_PAD) - CARD_PAD + 16;
     fb_fill_rect(panel_x + 20, sep_y, PANEL_W - 40, 1, GLASS_SEP);
 
     /* ── Step 8: power buttons ── */
@@ -281,7 +289,8 @@ void launcher_handle_click(int x, int y) {
         }
     }
 
-    int sep_y  = py + GRID_TOP + CARD_H + 16;
+    int rows_c = (APP_COUNT + CARD_COLS - 1) / CARD_COLS;
+    int sep_y  = py + GRID_TOP + rows_c * (CARD_H + CARD_PAD) - CARD_PAD + 16;
     int pby    = sep_y + 12, pbw = 150, pbh = 36;
     int pbtn_gx = panel_x + (PANEL_W / 2) - pbw - 8;
     int pbs_x   = panel_x + (PANEL_W / 2) + 8;
@@ -314,7 +323,8 @@ void launcher_handle_mouse(int x, int y) {
             { launcher_hover = i; break; }
     }
 
-    int sep_y  = panel_y + GRID_TOP + CARD_H + 16;
+    int rows_m = (APP_COUNT + CARD_COLS - 1) / CARD_COLS;
+    int sep_y  = panel_y + GRID_TOP + rows_m * (CARD_H + CARD_PAD) - CARD_PAD + 16;
     int pby    = sep_y + 12, pbw = 150, pbh = 36;
     int pbtn_gx = panel_x + (PANEL_W / 2) - pbw - 8;
     int pbs_x   = panel_x + (PANEL_W / 2) + 8;

@@ -20,6 +20,7 @@ static int shift_down  = 0;
 static int ctrl_down   = 0;
 static int alt_down    = 0;
 static int caps_lock   = 0;
+static int kbd_extended = 0;  /* set on 0xE0 prefix for arrow/nav keys */
 
 /* Scan code set 1 → ASCII (unshifted) */
 static const char sc_to_ascii[128] = {
@@ -47,8 +48,40 @@ static const char sc_to_ascii_shift[128] = {
 static void kbd_handler(registers_t *regs) {
     UNUSED(regs);
     uint8_t sc = io_inb(KBD_DATA);
+
+    /* 0xE0 prefix → next byte is an extended (arrow/nav) scancode */
+    if (sc == 0xE0) { kbd_extended = 1; return; }
+
     int released = sc & 0x80;
     sc &= 0x7F;
+
+    /* Extended key dispatch (arrow keys, Delete, Home, End, PgUp, PgDn) */
+    if (kbd_extended) {
+        kbd_extended = 0;
+        if (!released) {
+            char ext_ch = 0;
+            switch (sc) {
+            case 0x48: ext_ch = (char)0x80; break; /* Up    → KEY_UP    */
+            case 0x50: ext_ch = (char)0x81; break; /* Down  → KEY_DOWN  */
+            case 0x4B: ext_ch = (char)0x82; break; /* Left  → KEY_LEFT  */
+            case 0x4D: ext_ch = (char)0x83; break; /* Right → KEY_RIGHT */
+            case 0x47: ext_ch = (char)0x84; break; /* Home  → KEY_HOME  */
+            case 0x4F: ext_ch = (char)0x85; break; /* End   → KEY_END   */
+            case 0x49: ext_ch = (char)0x86; break; /* PgUp  → KEY_PGUP  */
+            case 0x51: ext_ch = (char)0x87; break; /* PgDn  → KEY_PGDN  */
+            case 0x53: ext_ch = (char)0x88; break; /* Del   → KEY_DEL   */
+            default:   break;
+            }
+            if (ext_ch) {
+                uint8_t next = (kbd_buf_tail + 1) % KBD_BUF_SIZE;
+                if (next != kbd_buf_head) {
+                    kbd_buf[kbd_buf_tail] = ext_ch;
+                    kbd_buf_tail = next;
+                }
+            }
+        }
+        return;
+    }
 
     switch (sc) {
         case 0x2A: case 0x36: shift_down = !released; return;

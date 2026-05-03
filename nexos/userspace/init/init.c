@@ -56,6 +56,23 @@ static void setup_etc(void) {
     vfs_write_file("/var/log/kernel.log", "# NexOS kernel log\n");
 }
 
+static void setup_bin(void) {
+    vfs_mkdir("/bin");
+    vfs_write_file("/bin/edit",       "# NexOS text editor\n");
+    vfs_write_file("/bin/nano",       "# NexOS text editor (alias)\n");
+    vfs_write_file("/bin/vi",         "# NexOS text editor (alias)\n");
+    vfs_write_file("/bin/viz",        "# NexOS music visualizer\n");
+    vfs_write_file("/bin/snake",      "# NexOS snake game\n");
+    vfs_write_file("/bin/sysmon",     "# NexOS system monitor\n");
+    vfs_write_file("/bin/htop",       "# NexOS system monitor (alias)\n");
+    vfs_write_file("/bin/browser",    "# NexOS web browser\n");
+    vfs_write_file("/bin/calc",       "# NexOS calculator\n");
+    vfs_write_file("/bin/clock",      "# NexOS clock\n");
+    vfs_write_file("/bin/files",      "# NexOS file manager\n");
+    vfs_write_file("/bin/nsh",        "# NexOS shell\n");
+    klog(LOG_INFO, "init: /bin populated (%d apps)", 12);
+}
+
 static void setup_dev(void) {
     vfs_create("/dev/null",   VFS_NODE_CHARDEV);
     vfs_create("/dev/zero",   VFS_NODE_CHARDEV);
@@ -119,6 +136,10 @@ void init_main(void) {
 
     setup_etc();
     klog(LOG_INFO, "init: heap after etc  = %u KB",
+         (unsigned)(heap_free_space() / 1024));
+
+    setup_bin();
+    klog(LOG_INFO, "init: heap after bin  = %u KB",
          (unsigned)(heap_free_space() / 1024));
 
     setup_dev();
