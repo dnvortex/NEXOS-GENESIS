@@ -74,8 +74,12 @@ static void mouse_irq_handler(registers_t *r) {
         mouse_btns = mouse_bytes[0] & 0x07;
         int dx = (int)(int8_t)mouse_bytes[1];
         int dy = -(int)(int8_t)mouse_bytes[2];
+        /* Clamp hardware overflow first */
         if (mouse_bytes[0] & 0x40) dx = (dx > 0) ? -127 : 127;
         if (mouse_bytes[0] & 0x80) dy = (dy > 0) ? -127 : 127;
+        /* 2× base speed + 50% boost on large deltas (|d| > 5) for fast flicks */
+        dx = dx * 2 + (dx > 5 ? dx / 2 : dx < -5 ? dx / 2 : 0);
+        dy = dy * 2 + (dy > 5 ? dy / 2 : dy < -5 ? dy / 2 : 0);
         mouse_x += dx;
         mouse_y += dy;
         if (mouse_x < 0) mouse_x = 0;
