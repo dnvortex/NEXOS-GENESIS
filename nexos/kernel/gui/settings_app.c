@@ -23,7 +23,6 @@
 void *kmalloc(size_t sz);
 void  kfree(void *p);
 
-/* ── String helpers ──────────────────────────────────────────────────────── */
 static int slen(const char *s) { int n=0; while(s[n]) n++; return n; }
 static void scpy(char *d, const char *s, int max) {
     int i=0; while(i<max-1&&s[i]){d[i]=s[i];i++;} d[i]=0;
@@ -45,20 +44,17 @@ static int sseq(const char *a, const char *b) {
     while(*a&&*a==*b){a++;b++;} return *a==*b;
 }
 
-/* ── Layout ──────────────────────────────────────────────────────────────── */
-#define SET_W       620          /* client width  */
-#define SET_H       460          /* total window height incl. titlebar */
-#define TAB_H        36          /* tab bar height in client area */
+#define SET_W       620
+#define SET_H       460
+#define TAB_H        36
 #define TAB_COUNT     4
-#define TAB_W       (SET_W / TAB_COUNT)   /* 155 px */
-#define CONTENT_Y   (TAB_H + 6)           /* content starts here (client-relative) */
+#define TAB_W       (SET_W / TAB_COUNT)
+#define CONTENT_Y   (TAB_H + 6)
 #define AP_ROW_H     38
 #define AP_VISIBLE    5
 
-/* ── Tab labels ──────────────────────────────────────────────────────────── */
 static const char *TAB_NAMES[TAB_COUNT] = { "WiFi", "Display", "System", "About" };
 
-/* ── Colour shortcuts ────────────────────────────────────────────────────── */
 #define C_BG    COL_BASE
 #define C_CARD  COL_MANTLE
 #define C_LINE  COL_SURFACE0
@@ -71,15 +67,12 @@ static const char *TAB_NAMES[TAB_COUNT] = { "WiFi", "Display", "System", "About"
 #define C_SEL   0x2A2B50
 #define C_LOCK  0xCBA6F7
 
-/* ── Drawing primitives ──────────────────────────────────────────────────── */
-
 static void set_hdr(int wx, int wy_client, int cy, const char *title) {
     font_puts(wx + 14, wy_client + cy, title, C_DIM, C_BG);
     int off = 14 + slen(title)*8 + 10;
     fb_fill_rect(wx + off, wy_client + cy + 6, SET_W - off - 14, 1, C_LINE);
 }
 
-/* Four-bar signal indicator (14px tall) */
 static void sig_bars(int x, int y, int pct) {
     static const int h[4] = { 4, 7, 11, 14 };
     for (int i = 0; i < 4; i++) {
@@ -91,7 +84,6 @@ static void sig_bars(int x, int y, int pct) {
     }
 }
 
-/* Rounded button — returns bounding rect hit-test */
 static void set_btn(int x, int y, int w, int h,
                     const char *lbl, uint32_t bg, uint32_t fg, int hov) {
     uint32_t c = hov ? anim_color_lerp(bg, 0xFFFFFF, 32) : bg;
@@ -101,7 +93,6 @@ static void set_btn(int x, int y, int w, int h,
     font_puts(x+(w-tw)/2, y+(h-14)/2, lbl, fg, c);
 }
 
-/* Password text field (masked with *) */
 static void pwd_field(int x, int y, int w, int h,
                       const char *val, int focused) {
     uint32_t bord = focused ? C_HL : COL_SURFACE1;
@@ -114,34 +105,23 @@ static void pwd_field(int x, int y, int w, int h,
         fb_fill_rect(x+8+ml*8, y+5, 2, h-10, C_HL);
 }
 
-/* ── Tab bar ──────────────────────────────────────────────────────────────── */
 static void paint_tabs(settings_app_t *s, int wx, int wy_c) {
     fb_fill_rect(wx, wy_c, SET_W, TAB_H, COL_CRUST);
     fb_fill_rect(wx, wy_c+TAB_H, SET_W, 2, COL_SURFACE1);
-
     for(int i=0;i<TAB_COUNT;i++) {
         int tx = wx + i*TAB_W;
         int act = (s->tab==i);
-        uint32_t tbg = act ? C_BG
-                     : (s->hover_tab==i ? COL_SURFACE0 : COL_CRUST);
+        uint32_t tbg = act ? C_BG : (s->hover_tab==i ? COL_SURFACE0 : COL_CRUST);
         fb_fill_rect(tx, wy_c, TAB_W, TAB_H, tbg);
-        if(act)
-            fb_fill_rect(tx, wy_c+TAB_H-2, TAB_W, 2, C_HL);
-        if(i>0)
-            fb_fill_rect(tx, wy_c+5, 1, TAB_H-10, COL_SURFACE1);
+        if(act) fb_fill_rect(tx, wy_c+TAB_H-2, TAB_W, 2, C_HL);
+        if(i>0) fb_fill_rect(tx, wy_c+5, 1, TAB_H-10, COL_SURFACE1);
         int tw = slen(TAB_NAMES[i])*8;
-        font_puts(tx+(TAB_W-tw)/2, wy_c+(TAB_H-14)/2,
-                  TAB_NAMES[i], act?C_HL:C_DIM, tbg);
+        font_puts(tx+(TAB_W-tw)/2, wy_c+(TAB_H-14)/2, TAB_NAMES[i], act?C_HL:C_DIM, tbg);
     }
 }
 
-/* ──────────────────────────────────────────────────────────────────────────
- *  WiFi tab
- * ────────────────────────────────────────────────────────────────────────── */
 static void paint_wifi(settings_app_t *s, int wx, int wy_c) {
     int cy = wy_c + CONTENT_Y;
-
-    /* ── Status card ── */
     fb_fill_rounded_rect(wx+10, cy+2, SET_W-20, 52, 8, C_CARD);
     fb_draw_rect_outline(wx+10, cy+2, SET_W-20, 52, C_LINE, 1);
 
@@ -151,24 +131,23 @@ static void paint_wifi(settings_app_t *s, int wx, int wy_c) {
         sig_bars(wx+22, cy+18, sig);
         font_puts(wx+52, cy+10, "Connected to:", C_DIM, C_CARD);
         font_puts(wx+52, cy+26, ssid, C_GRN, C_CARD);
-        /* signal % */
         char sp[8]; u32s((uint32_t)sig, sp);
         char pct[12]; scpy(pct,sp,12); append(pct,"%",12);
         font_puts(wx+52+slen(ssid)*8+12, cy+26, pct, C_DIM, C_CARD);
-        /* disconnect button */
         set_btn(wx+SET_W-128, cy+12, 112, 28,
                 "Disconnect", 0x3B1525, C_RED, s->hover_disconnect);
+    } else if(netif_find("eth0") && netif_is_up()) {
+        font_puts(wx+22, cy+16, "Ethernet connected on eth0", C_HL, C_CARD);
+        font_puts(wx+22, cy+30, "WiFi is available if you want wireless", C_DIM, C_CARD);
     } else {
         font_puts(wx+22, cy+16, "Not Connected", C_RED, C_CARD);
         font_puts(wx+22, cy+30, "Select a network below and press Connect", C_DIM, C_CARD);
     }
     cy += 58;
 
-    /* ── AP list header ── */
-    set_hdr(wx, 0, cy - wy_c, "Available Networks");   /* relative to window */
+    set_hdr(wx, 0, cy - wy_c, "Available Networks");
     cy += 20;
 
-    /* ── AP rows ── */
     for(int i=0;i<s->ap_count&&i<AP_VISIBLE;i++) {
         int ry  = cy + i*AP_ROW_H;
         int sel = (s->selected_ap==i);
@@ -179,19 +158,14 @@ static void paint_wifi(settings_app_t *s, int wx, int wy_c) {
         fb_fill_rect(wx+10, ry+AP_ROW_H-2, SET_W-20, 1, C_LINE);
 
         sig_bars(wx+18, ry+12, s->aps[i].signal);
-
-        /* SSID colour: green if currently connected to this AP */
-        int is_conn = wifi_is_connected() &&
-                      sseq(wifi_get_ssid(), s->aps[i].ssid);
+        int is_conn = wifi_is_connected() && sseq(wifi_get_ssid(), s->aps[i].ssid);
         uint32_t nc = sel ? C_HL : is_conn ? C_GRN : C_TXT;
         font_puts(wx+50, ry+12, s->aps[i].ssid, nc, rbg);
 
-        /* signal % */
         char sp[8]; u32s((uint32_t)s->aps[i].signal, sp);
         char pct[12]; scpy(pct,sp,12); append(pct,"%",12);
         font_puts(wx+SET_W-100, ry+12, pct, C_DIM, rbg);
 
-        /* security label */
         if(s->aps[i].encrypted)
             font_puts(wx+SET_W-54, ry+12, "WPA2", C_LOCK, rbg);
         else
@@ -199,7 +173,6 @@ static void paint_wifi(settings_app_t *s, int wx, int wy_c) {
     }
     cy += AP_VISIBLE * AP_ROW_H + 8;
 
-    /* ── Password field (encrypted AP selected) ── */
     int has_pwd_field = (s->selected_ap>=0 && s->aps[s->selected_ap].encrypted);
     if(has_pwd_field) {
         font_puts(wx+14, cy+4, "Password:", C_DIM, C_BG);
@@ -207,26 +180,19 @@ static void paint_wifi(settings_app_t *s, int wx, int wy_c) {
         cy += 36;
     }
 
-    /* ── Action buttons ── */
     if(s->selected_ap >= 0)
         set_btn(wx+14, cy, 116, 30, "Connect", C_HL, 0xFFFFFF, s->hover_connect);
     set_btn(wx+SET_W-116, cy, 100, 30, "Re-scan", COL_SURFACE1, C_TXT, s->hover_rescan);
 
-    /* ── Status message ── */
     if(s->msg_timer>0 && s->msg_buf[0]) {
         uint32_t mc = s->msg_ok ? C_GRN : C_RED;
         font_puts(wx+148, cy+8, s->msg_buf, mc, C_BG);
     }
 }
 
-/* ──────────────────────────────────────────────────────────────────────────
- *  Display tab
- * ────────────────────────────────────────────────────────────────────────── */
 static void paint_display(settings_app_t *s, int wx, int wy_c) {
     (void)s;
     int cy = wy_c + CONTENT_Y + 12;
-
-    /* Resolution */
     set_hdr(wx, 0, cy-wy_c, "Resolution");
     cy += 22;
     char res[20];
@@ -235,22 +201,14 @@ static void paint_display(settings_app_t *s, int wx, int wy_c) {
     fb_fill_rounded_rect(wx+14, cy, SET_W-28, 34, 6, C_CARD);
     font_puts(wx+22, cy+10, res, C_TXT, C_CARD);
     cy += 48;
-
-    /* Theme */
     set_hdr(wx, 0, cy-wy_c, "Color Theme");
     cy += 22;
     fb_fill_rounded_rect(wx+14, cy, SET_W-28, 50, 6, C_CARD);
     font_puts(wx+22, cy+ 8, "Catppuccin Mocha", C_TXT, C_CARD);
     font_puts(wx+22, cy+24, "Open the Theme app to switch themes.", C_DIM, C_CARD);
-    /* colour swatches */
-    static const uint32_t swatches[] = {
-        0x89B4FA,0xCBA6F7,0xF38BA8,0xFAB387,0xF9E2AF,0xA6E3A1,0x94E2D5
-    };
-    for(int i=0;i<7;i++)
-        fb_fill_rounded_rect(wx+SET_W-180+i*22, cy+12, 18, 26, 9, swatches[i]);
+    static const uint32_t swatches[] = { 0x89B4FA,0xCBA6F7,0xF38BA8,0xFAB387,0xF9E2AF,0xA6E3A1,0x94E2D5 };
+    for(int i=0;i<7;i++) fb_fill_rounded_rect(wx+SET_W-180+i*22, cy+12, 18, 26, 9, swatches[i]);
     cy += 64;
-
-    /* Brightness */
     set_hdr(wx, 0, cy-wy_c, "Brightness");
     cy += 22;
     fb_fill_rounded_rect(wx+14, cy, SET_W-28, 30, 6, COL_SURFACE0);
@@ -259,22 +217,15 @@ static void paint_display(settings_app_t *s, int wx, int wy_c) {
     fb_fill_rect_blend(wx+14, cy, bw, 14, 0xFFFFFF, 20);
     font_puts(wx+14+bw/2-12, cy+8, "80%", 0xFFFFFF, C_HL);
     cy += 44;
-
-    /* Dot pitch */
     set_hdr(wx, 0, cy-wy_c, "Rendering");
     cy += 22;
     fb_fill_rounded_rect(wx+14, cy, SET_W-28, 34, 6, C_CARD);
     font_puts(wx+22, cy+10, "Software rasteriser  |  No GPU acceleration", C_DIM, C_CARD);
 }
 
-/* ──────────────────────────────────────────────────────────────────────────
- *  System tab
- * ────────────────────────────────────────────────────────────────────────── */
 static void paint_system(settings_app_t *s, int wx, int wy_c) {
     (void)s;
     int cy = wy_c + CONTENT_Y + 12;
-
-    /* Date & Time */
     set_hdr(wx, 0, cy-wy_c, "Date & Time");
     cy += 22;
     rtc_time_t rt; rtc_get_time(&rt);
@@ -294,8 +245,6 @@ static void paint_system(settings_app_t *s, int wx, int wy_c) {
     font_puts2x(wx+22, cy+7, tbuf, C_HL, C_CARD);
     font_puts(wx+120, cy+14, dbuf, C_DIM, C_CARD);
     cy += 56;
-
-    /* Memory */
     set_hdr(wx, 0, cy-wy_c, "Memory");
     cy += 22;
     uint32_t free_mb = (uint32_t)(pmm_get_free_frames()*4/1024);
@@ -308,8 +257,6 @@ static void paint_system(settings_app_t *s, int wx, int wy_c) {
     if(mw>2) fb_fill_rounded_rect(wx+14, cy, mw, 32, 6, mc);
     font_puts(wx+22, cy+9, mstr, C_TXT, used_pct>50?mc:COL_SURFACE0);
     cy += 46;
-
-    /* Network */
     set_hdr(wx, 0, cy-wy_c, "Network");
     cy += 22;
     fb_fill_rounded_rect(wx+14, cy, SET_W-28, 42, 6, C_CARD);
@@ -320,27 +267,21 @@ static void paint_system(settings_app_t *s, int wx, int wy_c) {
         char sstr[32]; u32s((uint32_t)wifi_get_signal(),sstr);
         append(sstr,"% signal",32);
         font_puts(wx+22, cy+24, sstr, C_DIM, C_CARD);
-    } else if(netif_is_up()) {
+    } else if(netif_find("eth0") && netif_is_up()) {
         font_puts(wx+22, cy+14, "eth0  connected (Ethernet)", C_HL, C_CARD);
     } else {
         font_puts(wx+22, cy+14, "No network interface up", C_RED, C_CARD);
     }
     cy += 56;
-
-    /* Power */
     set_hdr(wx, 0, cy-wy_c, "Power");
     cy += 22;
     set_btn(wx+14,  cy, 120, 34, "Reboot",   0x0E1A28, COL_SKY,  0);
     set_btn(wx+150, cy, 120, 34, "Shutdown", 0x280E0E, C_RED,    0);
 }
 
-/* ──────────────────────────────────────────────────────────────────────────
- *  About tab
- * ────────────────────────────────────────────────────────────────────────── */
 static void paint_about(settings_app_t *s, int wx, int wy_c) {
     (void)s;
     int cy = wy_c + CONTENT_Y + 16;
-
     font_puts2x(wx+SET_W/2-48, cy, "NexOS", C_HL, C_BG);
     cy += 42;
     const char *ver = "Version  0.1  (x86_64 bare-metal)";
@@ -348,7 +289,6 @@ static void paint_about(settings_app_t *s, int wx, int wy_c) {
     cy += 20;
     fb_fill_rect(wx+14, cy, SET_W-28, 1, C_LINE);
     cy += 14;
-
     static const char *rows[][2] = {
         {"Architecture", "x86_64"},
         {"Kernel",       "NexOS monolithic v0.1"},
@@ -370,20 +310,13 @@ static void paint_about(settings_app_t *s, int wx, int wy_c) {
     }
 }
 
-/* ──────────────────────────────────────────────────────────────────────────
- *  Master paint
- * ────────────────────────────────────────────────────────────────────────── */
 static void settings_paint(window_t *win) {
     settings_app_t *s = (settings_app_t *)win->userdata;
     if(!s) return;
-
     int wx   = win->x;
-    int wy_c = win->y + WM_TITLEBAR_H;   /* top of client area */
-
+    int wy_c = win->y + WM_TITLEBAR_H;
     fb_fill_rect(wx, wy_c, SET_W, SET_H - WM_TITLEBAR_H, C_BG);
-
     paint_tabs(s, wx, wy_c);
-
     switch(s->tab) {
     case 0: paint_wifi   (s, wx, wy_c); break;
     case 1: paint_display(s, wx, wy_c); break;
@@ -392,39 +325,21 @@ static void settings_paint(window_t *win) {
     }
 }
 
-/* ──────────────────────────────────────────────────────────────────────────
- *  Hit-test helpers
- * ────────────────────────────────────────────────────────────────────────── */
 static int in_rect(int px, int py, int rx, int ry, int rw, int rh) {
     return px>=rx && px<rx+rw && py>=ry && py<ry+rh;
 }
+static int ap_list_cy(void) { return CONTENT_Y + 58 + 20; }
+static int after_ap_cy(void) { return ap_list_cy() + AP_VISIBLE * AP_ROW_H + 8; }
 
-/* Compute AP list geometry (client-relative cy at start of AP rows) */
-static int ap_list_cy(void) {
-    /* CONTENT_Y + status card (58) + header (20) */
-    return CONTENT_Y + 58 + 20;
-}
-
-/* cy after AP list */
-static int after_ap_cy(void) {
-    return ap_list_cy() + AP_VISIBLE * AP_ROW_H + 8;
-}
-
-/* ──────────────────────────────────────────────────────────────────────────
- *  Click handler
- * ────────────────────────────────────────────────────────────────────────── */
 static void settings_click(window_t *win, int cx, int cy, int btn) {
     (void)btn;
     settings_app_t *s = (settings_app_t *)win->userdata;
     if(!s) return;
-
-    /* ── Tab bar ── */
     if(cy < TAB_H) {
         int newtab = cx / TAB_W;
         if(newtab>=0 && newtab<TAB_COUNT) {
             s->tab = newtab;
             if(newtab==0) {
-                /* Re-scan on WiFi tab switch */
                 s->ap_count    = wifi_scan(s->aps, WIFI_MAX_APS);
                 s->selected_ap = -1;
                 s->pwd_len     = 0;
@@ -434,8 +349,6 @@ static void settings_click(window_t *win, int cx, int cy, int btn) {
         }
         return;
     }
-
-    /* ── System tab power buttons ── */
     if(s->tab==2) {
         int pcy = CONTENT_Y+12 + 22+56 + 22+46 + 22+56 + 22;
         if(in_rect(cx,cy, 14, pcy, 120, 34)) {
@@ -443,18 +356,12 @@ static void settings_click(window_t *win, int cx, int cy, int btn) {
             return;
         }
         if(in_rect(cx,cy, 150, pcy, 120, 34)) {
-            __asm__ volatile("mov $0x2000,%%ax; mov $0x604,%%dx; outw %%ax,%%dx"
-                             ::: "eax","edx");
+            __asm__ volatile("mov $0x2000,%%ax; mov $0x604,%%dx; outw %%ax,%%dx" ::: "eax","edx");
             return;
         }
         return;
     }
-
     if(s->tab != 0) return;
-
-    /* ── WiFi tab ── */
-
-    /* Disconnect button */
     if(wifi_is_connected()) {
         if(in_rect(cx,cy, SET_W-128, CONTENT_Y+2+12, 112, 28)) {
             wifi_disconnect();
@@ -464,8 +371,6 @@ static void settings_click(window_t *win, int cx, int cy, int btn) {
             return;
         }
     }
-
-    /* AP rows */
     int acy = ap_list_cy();
     for(int i=0;i<s->ap_count&&i<AP_VISIBLE;i++) {
         int ry = acy + i*AP_ROW_H;
@@ -482,8 +387,6 @@ static void settings_click(window_t *win, int cx, int cy, int btn) {
             return;
         }
     }
-
-    /* Password field click */
     int aacy = after_ap_cy();
     if(s->selected_ap>=0 && s->aps[s->selected_ap].encrypted) {
         if(in_rect(cx,cy, 96, aacy, 320, 28)) {
@@ -492,8 +395,6 @@ static void settings_click(window_t *win, int cx, int cy, int btn) {
         }
         aacy += 36;
     }
-
-    /* Connect button */
     if(s->selected_ap>=0) {
         if(in_rect(cx,cy, 14, aacy, 116, 30)) {
             int r = wifi_connect(s->aps[s->selected_ap].ssid, s->password);
@@ -514,8 +415,6 @@ static void settings_click(window_t *win, int cx, int cy, int btn) {
             return;
         }
     }
-
-    /* Re-scan button */
     if(in_rect(cx,cy, SET_W-116, aacy, 100, 30)) {
         s->ap_count    = wifi_scan(s->aps, WIFI_MAX_APS);
         s->selected_ap = -1;
@@ -525,17 +424,12 @@ static void settings_click(window_t *win, int cx, int cy, int btn) {
     }
 }
 
-/* ──────────────────────────────────────────────────────────────────────────
- *  Key handler  (password input)
- * ────────────────────────────────────────────────────────────────────────── */
 static void settings_key(window_t *win, char key) {
     settings_app_t *s = (settings_app_t *)win->userdata;
     if(!s || s->tab!=0 || !s->pwd_focus) return;
-
     if(key=='\b' || key==127) {
         if(s->pwd_len>0) { s->pwd_len--; s->password[s->pwd_len]=0; }
     } else if(key=='\r' || key=='\n') {
-        /* Enter triggers connect */
         if(s->selected_ap>=0) {
             int r = wifi_connect(s->aps[s->selected_ap].ssid, s->password);
             if(r==0) {
@@ -557,18 +451,12 @@ static void settings_key(window_t *win, char key) {
     }
 }
 
-/* ──────────────────────────────────────────────────────────────────────────
- *  Close handler
- * ────────────────────────────────────────────────────────────────────────── */
 static void settings_close(window_t *win) {
     settings_app_t *s = (settings_app_t *)win->userdata;
     if(s) { kfree(s); win->userdata = NULL; }
     wm_close(win);
 }
 
-/* ──────────────────────────────────────────────────────────────────────────
- *  Create
- * ────────────────────────────────────────────────────────────────────────── */
 settings_app_t *settings_create(int x, int y) {
     settings_app_t *s = (settings_app_t *)kmalloc(sizeof(settings_app_t));
     if(!s) return NULL;
@@ -577,21 +465,15 @@ settings_app_t *settings_create(int x, int y) {
     s->selected_ap = -1;
     s->hover_tab   = -1;
     s->hover_ap    = -1;
-
-    /* Initial scan */
     s->ap_count = wifi_scan(s->aps, WIFI_MAX_APS);
-
-    /* SET_H is total height including WM titlebar */
     window_t *win = wm_new(x, y, SET_W, SET_H, "Settings");
     if(!win) { kfree(s); return NULL; }
-
     win->userdata  = s;
     s->win         = win;
     win->on_paint  = settings_paint;
     win->on_click  = settings_click;
     win->on_key    = settings_key;
     win->on_close  = settings_close;
-
     klog(LOG_INFO, "Settings: opened");
     return s;
 }

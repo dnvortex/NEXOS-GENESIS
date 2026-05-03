@@ -2,6 +2,7 @@
 #pragma once
 #include "wm.h"
 #include "../drivers/wifi.h"
+#include "../net/netif.h"
 #include <stdint.h>
 
 typedef struct {
