@@ -1,4 +1,4 @@
-# NexOS — Makefile | Top-level build system | MIT License
+# NexOS - Makefile | Top-level build system | MIT License
 
 # Cross-compiler detection
 ifneq ($(shell which x86_64-elf-gcc 2>/dev/null),)
@@ -84,7 +84,8 @@ KERNEL_C_SOURCES = \
     $(KERNEL)/gui/sysinfo_app.c \
     $(KERNEL)/gui/theme_app.c \
     $(KERNEL)/gui/notif.c \
-    $(KERNEL)/gui/gui.c
+    $(KERNEL)/gui/gui.c \
+    $(KERNEL)/installer/installer.c
 
 # ---- Assembly sources ----
 KERNEL_ASM_SOURCES = \
@@ -100,7 +101,8 @@ ALL_OBJS        = $(KERNEL_ASM_OBJS) $(KERNEL_C_OBJS)
 # ---- Targets ----
 DISK_IMG = $(BUILD)/nexos_disk.img
 
-.PHONY: all kernel iso clean run run-debug run-with-disk disk install-usb check
+.PHONY: all kernel iso clean run run-debug run-with-disk disk \
+	install install-usb run-vbox run-vmware run-installer check
 
 all: kernel iso
 
@@ -129,6 +131,25 @@ run-with-disk: iso disk
 
 install-usb: iso
 	@$(PYTHON) $(TOOLS)/install_usb.py
+
+# -- Full installer TUI (USB / QEMU / VirtualBox / VMware) ------------------
+install: iso
+	@$(PYTHON) $(TOOLS)/installer.py
+
+# -- Boot NexOS in QEMU with installer mode (nexos.install=1) ---------------
+run-installer: iso
+	@chmod +x $(TOOLS)/run_qemu.sh
+	@NEXOS_INSTALL=1 QEMU_EXTRA="-append nexos.install=1" $(TOOLS)/run_qemu.sh
+
+# -- VirtualBox quick-launch -------------------------------------------------
+run-vbox: iso
+	@chmod +x $(TOOLS)/run_vbox.sh
+	@$(TOOLS)/run_vbox.sh
+
+# -- VMware quick-launch -----------------------------------------------------
+run-vmware: iso
+	@chmod +x $(TOOLS)/run_vmware.sh
+	@$(TOOLS)/run_vmware.sh
 
 check:
 	$(CC) $(CFLAGS) -fsyntax-only $(KERNEL_C_SOURCES)

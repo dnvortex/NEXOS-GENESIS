@@ -22,6 +22,7 @@
 #include "drivers/rtl8139.h"
 #include "drivers/wifi.h"
 #include "proc/process.h"
+#include "installer/installer.h"
 #include "proc/scheduler.h"
 #include "proc/syscall.h"
 #include <stdarg.h>
@@ -32,9 +33,10 @@ extern uint8_t kernel_start[];
 extern uint8_t kernel_end[];
 
 /* ── Multiboot2 structures (corrected field layout) ─────────────────────── */
-#define MB2_TAG_END  0
-#define MB2_TAG_MMAP 6
-#define MB2_TAG_FB   8
+#define MB2_TAG_END     0
+#define MB2_TAG_CMDLINE 1
+#define MB2_TAG_MMAP    6
+#define MB2_TAG_FB      8
 
 typedef struct { uint32_t total_size; uint32_t reserved; }
     __attribute__((packed)) mb2_info_t;
@@ -204,6 +206,26 @@ void kernel_main(uint32_t mb2_magic, mb2_info_t *mb2_info) {
     uint64_t mem_upper = 256ULL * 1024 * 1024;
     pmm_init(0, mem_upper);
 
+    /* Capture kernel cmdline from multiboot2 before the main tag loops */
+    static char kernel_cmdline[256];
+    kernel_cmdline[0] = 0;
+    if (mb2_magic == MULTIBOOT2_BOOTLOADER_MAGIC && mb2_info) {
+        uint8_t *tp0 = (uint8_t *)mb2_info + 8;
+        while (1) {
+            mb2_tag_t *t0 = (mb2_tag_t *)tp0;
+            if (t0->type == MB2_TAG_END) break;
+            if (t0->type == MB2_TAG_CMDLINE) {
+                const char *cl = (const char *)tp0 + 8;
+                int i = 0;
+                while (cl[i] && i < 254) { kernel_cmdline[i] = cl[i]; i++; }
+                kernel_cmdline[i] = 0;
+            }
+            uint32_t s0 = t0->size;
+            if (s0 % 8) s0 += 8 - (s0 % 8);
+            tp0 += s0;
+        }
+    }
+
     if (mb2_magic == MULTIBOOT2_BOOTLOADER_MAGIC && mb2_info) {
         uint8_t *tag_ptr = (uint8_t *)mb2_info + 8;
         while (1) {
@@ -319,6 +341,26 @@ void kernel_main(uint32_t mb2_magic, mb2_info_t *mb2_info) {
     }
     if (!fb.initialized)
         klog(LOG_WARN, "FB: no framebuffer tag from GRUB - GUI will not start");
+
+    /* ── Installer mode: boot with "nexos.install" in kernel cmdline ─────── */
+    {
+        int found = 0;
+        const char *needle = "nexos.install";
+        int nl = 13; /* strlen("nexos.install") */
+        for (int ci = 0; kernel_cmdline[ci]; ci++) {
+            int match = 1;
+            for (int ni = 0; ni < nl; ni++) {
+                if (kernel_cmdline[ci + ni] != needle[ni]) { match = 0; break; }
+            }
+            if (match) { found = 1; break; }
+        }
+        if (found) {
+            klog(LOG_INFO, "Installer: nexos.install detected — starting installer");
+            installer_run();
+            /* installer_run() returns when user exits or reboots */
+            klog(LOG_INFO, "Installer: exited — continuing normal boot");
+        }
+    }
 
     /* ── 8. PIT timer at 1000 Hz ──────────────────────────────────────────── */
     timer_init(1000);
