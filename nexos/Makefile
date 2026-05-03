@@ -85,7 +85,9 @@ KERNEL_C_SOURCES = \
     $(KERNEL)/gui/theme_app.c \
     $(KERNEL)/gui/notif.c \
     $(KERNEL)/gui/gui.c \
-    $(KERNEL)/installer/installer.c
+    $(KERNEL)/installer/installer.c \
+    $(KERNEL)/pkg/npkg.c \
+    $(KERNEL)/pkg/pkg_store.c
 
 # ---- Assembly sources ----
 KERNEL_ASM_SOURCES = \
@@ -128,6 +130,13 @@ disk:
 run-with-disk: iso disk
 	@chmod +x $(TOOLS)/run_qemu.sh
 	@NEXOS_USE_DISK=1 $(TOOLS)/run_qemu.sh
+
+packages:
+	@echo "[npkg] Building packages..."
+	@$(PYTHON) $(TOOLS)/npkg_build.py genstore
+	@echo "[npkg] Done. Re-run 'make all' to embed packages into the kernel."
+
+.PHONY: packages
 
 install-usb: iso
 	@$(PYTHON) $(TOOLS)/install_usb.py

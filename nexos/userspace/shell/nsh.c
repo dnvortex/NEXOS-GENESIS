@@ -23,6 +23,7 @@
 #include "../../kernel/net/dns.h"
 #include "../../kernel/net/tcp.h"
 #include "../../kernel/net/http.h"
+#include "../../kernel/pkg/npkg.h"
 
 /* ════════════════════════════════════════
  * String helpers (no libc)
@@ -63,6 +64,9 @@ static int      pipe_read_mode  = 0; /* reading from pipe_buf as stdin */
 
 static vfs_node_t *redirect_node   = NULL;
 static uint64_t    redirect_offset = 0;
+
+/* Forward declaration — nsh_exec_single is defined later in this file */
+static int nsh_exec_single(char *line);
 
 /* GUI terminal output hook — set by term_app before calling nsh_exec_command */
 static void (*g_nsh_char_fn)(char) = 0;
@@ -502,6 +506,11 @@ static int cmd_help(int argc, char *argv[]) {
     nsh_println("  ifconfig           Network interface status");
     nsh_println("  wifi scan|connect|disconnect|status  WiFi manager");
     nsh_println("  ping <ip>          Send ICMP echo requests");
+    nsh_println("  npkg install <f>   Install .npkg package from path");
+    nsh_println("  npkg remove <n>    Remove installed package");
+    nsh_println("  npkg list          List installed packages");
+    nsh_println("  npkg info <n>      Show package details");
+    nsh_println("  npkg store         List packages in embedded store");
     nsh_println("");
     nsh_println("Shell features:");
     nsh_println("  cmd1 | cmd2        Pipe output of cmd1 into cmd2");
@@ -1152,6 +1161,107 @@ static int cmd_wifi(int argc, char *argv[]) {
     return 1;
 }
 
+/* ── npkg ────────────────────────────────────────────────────────────────── */
+static int cmd_npkg(int argc, char *argv[]) {
+    if (argc < 2) {
+        nsh_println("npkg — NexOS Package Manager");
+        nsh_println("Usage:");
+        nsh_println("  npkg install <path>   Install a .npkg package");
+        nsh_println("  npkg remove  <name>   Remove installed package");
+        nsh_println("  npkg list             List installed packages");
+        nsh_println("  npkg info   <name>    Show package details");
+        nsh_println("  npkg store            List embedded packages");
+        return 0;
+    }
+
+    if (nsh_strcmp(argv[1], "install") == 0) {
+        if (argc < 3) { nsh_println("npkg install: missing path"); return 1; }
+        char path[1024]; resolve_path(argv[2], path, 1024);
+        int rc = npkg_install(path);
+        if      (rc == NPKG_OK)            { nsh_print("[npkg] Installed: "); nsh_println(argv[2]); }
+        else if (rc == NPKG_ERR_NOTFOUND)  { nsh_print("[npkg] Not found: "); nsh_println(path); }
+        else if (rc == NPKG_ERR_BADMAGIC)  { nsh_println("[npkg] Invalid .npkg file"); }
+        else if (rc == NPKG_ERR_EXISTS)    { nsh_print("[npkg] Already installed: "); nsh_println(argv[2]); }
+        else if (rc == NPKG_ERR_NOMEM)     { nsh_println("[npkg] Out of memory"); }
+        else                               { nsh_println("[npkg] Install failed"); }
+        return (rc == NPKG_OK) ? 0 : 1;
+
+    } else if (nsh_strcmp(argv[1], "remove") == 0) {
+        if (argc < 3) { nsh_println("npkg remove: missing package name"); return 1; }
+        int rc = npkg_remove(argv[2]);
+        if      (rc == NPKG_OK)           { nsh_print("[npkg] Removed: "); nsh_println(argv[2]); }
+        else if (rc == NPKG_ERR_NOTFOUND) { nsh_print("[npkg] Not installed: "); nsh_println(argv[2]); }
+        else                              { nsh_println("[npkg] Remove failed"); }
+        return (rc == NPKG_OK) ? 0 : 1;
+
+    } else if (nsh_strcmp(argv[1], "list") == 0) {
+        char buf[4096]; buf[0] = 0;
+        int n = npkg_list(buf, 4096);
+        if (n == 0) { nsh_println("(no packages installed)"); }
+        else {
+            nsh_println("Installed packages:");
+            nsh_print(buf);
+        }
+        return 0;
+
+    } else if (nsh_strcmp(argv[1], "info") == 0) {
+        if (argc < 3) { nsh_println("npkg info: missing package name"); return 1; }
+        char buf[2048]; buf[0] = 0;
+        int rc = npkg_info(argv[2], buf, 2048);
+        if (rc == NPKG_OK) nsh_print(buf);
+        else { nsh_print("[npkg] Package not found: "); nsh_println(argv[2]); }
+        return (rc == NPKG_OK) ? 0 : 1;
+
+    } else if (nsh_strcmp(argv[1], "store") == 0) {
+        int found = 0;
+        for (int i = 0; npkg_store[i].name != (void*)0; i++) {
+            nsh_println(npkg_store[i].name);
+            found++;
+        }
+        if (!found) nsh_println("(no packages in embedded store — run 'make packages')");
+        return 0;
+
+    } else {
+        nsh_print("[npkg] Unknown sub-command: "); nsh_println(argv[1]);
+        nsh_println("  Try: install, remove, list, info, store");
+        return 1;
+    }
+}
+
+/* ── Script execution: look up /usr/bin/<cmd>[.sh] ──────────────────────── */
+static int nsh_run_script(const char *path, int argc, char *argv[]) {
+    uint32_t sz;
+    vfs_stat_t st;
+    if (vfs_stat(path, &st) != 0) return -1;
+    sz = st.size;
+    if (sz == 0 || sz > 65536) return -1;
+    uint8_t *buf = (uint8_t*)kmalloc(sz + 2);
+    if (!buf) return 1;
+    vfs_node_t *n = vfs_open(path, 0);
+    if (!n) { kfree(buf); return -1; }
+    uint32_t got = vfs_read(n, 0, sz, buf);
+    vfs_close(n);
+    buf[got] = '\n'; buf[got+1] = 0;
+    /* Execute each line via nsh_exec_single */
+    char *p = (char*)buf;
+    while (*p) {
+        /* Skip shebang line */
+        if (p == (char*)buf && p[0] == '#' && p[1] == '!') {
+            while (*p && *p != '\n') p++;
+            if (*p == '\n') p++;
+            continue;
+        }
+        /* Extract line */
+        char line[NSH_LINE_MAX]; int li = 0;
+        while (*p && *p != '\n' && li < NSH_LINE_MAX - 1) line[li++] = *p++;
+        line[li] = 0;
+        if (*p == '\n') p++;
+        if (li > 0 && line[0] != '#') nsh_exec_single(line);
+    }
+    kfree(buf);
+    return 0;
+}
+
 /* ── netstat ──────────────────────────────────────────────────────────────── */
 static int cmd_netstat(int argc, char *argv[]) {
     (void)argc; (void)argv;
@@ -1373,6 +1483,19 @@ static int nsh_exec_builtin(int argc, char *argv[]) {
     if (nsh_strcmp(cmd,"wget")==0)     return cmd_wget(argc,argv);
     if (nsh_strcmp(cmd,"netstat")==0)  return cmd_netstat(argc,argv);
     if (nsh_strcmp(cmd,"wifi")==0)     return cmd_wifi(argc,argv);
+    if (nsh_strcmp(cmd,"npkg")==0)     return cmd_npkg(argc,argv);
+
+    /* ── PATH-based script lookup: /usr/bin/<cmd> or /usr/bin/<cmd>.sh ── */
+    {
+        char spath[512];
+        /* try /usr/bin/<cmd> first */
+        nsh_strcpy(spath, "/usr/bin/", 512);
+        nsh_strcat(spath, cmd, 512);
+        if (!nsh_run_script(spath, argc, argv)) return 0;
+        /* try /usr/bin/<cmd>.sh */
+        nsh_strcat(spath, ".sh", 512);
+        if (!nsh_run_script(spath, argc, argv)) return 0;
+    }
 
     nsh_print("nsh: command not found: "); nsh_println(cmd);
     return 127;

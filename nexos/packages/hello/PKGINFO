@@ -1,0 +1,6 @@
+Name: hello
+Version: 1.0.0
+Description: Hello World demo package for NexOS
+Author: NexOS Team
+License: MIT
+InstallScript: install.sh

@@ -1,5 +1,6 @@
 /* NexOS — kernel/kernel.c | Kernel main entry point | MIT License */
 #include "kernel.h"
+#include "pkg/npkg.h"
 #include "drivers/vga.h"
 #include "drivers/serial.h"
 #include "drivers/timer.h"
@@ -400,7 +401,11 @@ void kernel_main(uint32_t mb2_magic, mb2_info_t *mb2_info) {
     /* ── 16. /proc filesystem (needs heap + process table) ────────────────── */
     procfs_init();
 
-    /* ── 17. Create init process (PID 1) and drop to ring 3 ──────────────── */
+    /* ── 17. Package manager (needs VFS to be ready) ─────────────────────── */
+    npkg_init();
+    npkg_init_store();
+
+    /* ── 18. Create init process (PID 1) and drop to ring 3 ──────────────── */
     klog(LOG_INFO, "Launching init process (PID 1)...");
     process_t *init = proc_create("init", init_main, 9);
     if (!init) {

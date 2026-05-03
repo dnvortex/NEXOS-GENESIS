@@ -1,0 +1,14 @@
+hello — NexOS Hello World Package
+==================================
+
+A simple demo package showing how to create and install
+software for NexOS using the npkg package manager.
+
+Usage:
+  hello          Run the hello script
+  npkg info hello  Show package information
+  npkg remove hello  Uninstall this package
+
+Files installed:
+  /usr/bin/hello.sh
+  /usr/share/hello/README
