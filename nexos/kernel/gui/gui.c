@@ -9,6 +9,9 @@
 #include "sysinfo_app.h"
 #include "theme_app.h"
 #include "notif.h"
+#include "browser_app.h"
+#include "calc_app.h"
+#include "clock_app.h"
 #include "../drivers/fb.h"
 #include "../drivers/font.h"
 #include "../drivers/mouse.h"
@@ -40,6 +43,30 @@ void launch_sysinfo(void) {
 
 void launch_themewin(void) {
     theme_create(380, 200);
+}
+
+void launch_browser(void) {
+    static int bc = 0;
+    int ox = 80  + (bc % 3) * 24;
+    int oy = 50  + (bc % 3) * 18;
+    browser_create(ox, oy);
+    bc++;
+}
+
+void launch_calc(void) {
+    static int cc = 0;
+    int ox = 420 + (cc % 4) * 18;
+    int oy = 90  + (cc % 4) * 18;
+    calc_create(ox, oy);
+    cc++;
+}
+
+void launch_clock(void) {
+    static int kc = 0;
+    int ox = 520 + (kc % 3) * 16;
+    int oy = 260 + (kc % 3) * 16;
+    clock_create(ox, oy);
+    kc++;
 }
 
 /* ── Simple pseudo-random for window placement ─────────────────────────── */

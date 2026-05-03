@@ -84,6 +84,9 @@ KERNEL_C_SOURCES = \
     $(KERNEL)/gui/sysinfo_app.c \
     $(KERNEL)/gui/theme_app.c \
     $(KERNEL)/gui/notif.c \
+    $(KERNEL)/gui/browser_app.c \
+    $(KERNEL)/gui/calc_app.c \
+    $(KERNEL)/gui/clock_app.c \
     $(KERNEL)/gui/gui.c \
     $(KERNEL)/installer/installer.c \
     $(KERNEL)/pkg/npkg.c \

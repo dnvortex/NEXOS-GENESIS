@@ -16,6 +16,9 @@ void launch_terminal(void);
 void launch_filemanager(void);
 void launch_sysinfo(void);
 void launch_themewin(void);
+void launch_browser(void);
+void launch_calc(void);
+void launch_clock(void);
 
 static void action_restart(void) {
     __asm__ volatile("mov $0xFE, %%al\n out %%al, $0x64\n" ::: "eax");
@@ -64,6 +67,9 @@ static const app_item_t apps[] = {
     { "Files",      'F', 0x89B4FA, launch_filemanager },
     { "System",     'S', 0xCBA6F7, launch_sysinfo     },
     { "Theme",      'C', 0xFAB387, launch_themewin    },
+    { "Browser",    'W', 0x74C7EC, launch_browser     },
+    { "Calc",       '+', 0xF9E2AF, launch_calc        },
+    { "Clock",      'O', 0x94E2D5, launch_clock       },
 };
 #define APP_COUNT  ((int)(sizeof(apps)/sizeof(apps[0])))
 
