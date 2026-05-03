@@ -234,14 +234,11 @@ void launcher_draw(void) {
     int grid_x0 = panel_x + (PANEL_W - total_w) / 2;
     int grid_y  = py + GRID_TOP;
 
-    for (int i = 0; i < APP_COUNT && i < CARD_COLS; i++) {
-        int card_cx = grid_x0 + i * (CARD_W + CARD_PAD) + CARD_W / 2;
-        draw_card(card_cx, grid_y, i, launcher_hover == i);
-    }
-    for (int i = CARD_COLS; i < APP_COUNT; i++) {
-        int col     = i - CARD_COLS;
+    for (int i = 0; i < APP_COUNT; i++) {
+        int row     = i / CARD_COLS, col = i % CARD_COLS;
         int card_cx = grid_x0 + col * (CARD_W + CARD_PAD) + CARD_W / 2;
-        draw_card(card_cx, grid_y + CARD_H + CARD_PAD, i, launcher_hover == i);
+        int card_cy = grid_y  + row * (CARD_H + CARD_PAD);
+        draw_card(card_cx, card_cy, i, launcher_hover == i);
     }
 
     /* ── Step 7: separator ── */
