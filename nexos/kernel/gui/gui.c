@@ -16,6 +16,7 @@
 #include "viz_app.h"
 #include "snake_app.h"
 #include "sysmon_app.h"
+#include "settings_app.h"
 #include "../drivers/fb.h"
 #include "../drivers/font.h"
 #include "../drivers/mouse.h"
@@ -103,6 +104,14 @@ void launch_sysmon(void) {
     int oy = 70  + (mc % 4) * 16;
     sysmon_create(ox, oy);
     mc++;
+}
+
+void launch_settings(void) {
+    static int sc = 0;
+    int ox = 160 + (sc % 3) * 20;
+    int oy = 80  + (sc % 3) * 20;
+    settings_create(ox, oy);
+    sc++;
 }
 
 /* ── Simple pseudo-random for window placement ─────────────────────────── */
@@ -235,10 +244,13 @@ void gui_main(void) {
             uint32_t frame_ms = (uint32_t)(now - last_frame);
             last_frame = now;
 
+            /* Restore cursor FIRST so all drawing happens on a clean fb */
+            cursor_restore();
+
             /* Advance launcher open/close animation */
             launcher_tick(frame_ms);
 
-            /* Only repaint the desktop gradient when something changed */
+            /* Repaint desktop gradient only when something changed */
             if (fb_scene_dirty) {
                 desktop_draw();
                 fb_scene_dirty = 0;
@@ -248,7 +260,8 @@ void gui_main(void) {
             taskbar_draw();
             if (launcher_is_visible()) launcher_draw();
             notif_draw();
-            cursor_restore();
+
+            /* Draw cursor on top of everything */
             cursor_draw(mx, my);
         }
 
@@ -264,8 +277,8 @@ void gui_main(void) {
             last_notif = now;
         }
 
-        /* ── Desktop aurora phase + periodic repaint (every ~2 s) ───────── */
-        if (now - last_aurora >= 2000) {
+        /* ── Desktop aurora phase + periodic repaint (every ~6 s) ───────── */
+        if (now - last_aurora >= 6000) {
             desktop_set_phase((uint32_t)(now - last_aurora));
             last_aurora    = now;
             fb_scene_dirty = 1;   /* trigger aurora-updated background repaint */

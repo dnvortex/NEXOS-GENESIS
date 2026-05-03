@@ -41,6 +41,8 @@ void wifi_init(void) {
     wifi_sig = 0;
     klog(LOG_INFO, "WiFi: simulated 802.11n adapter ready (wlan0, %d APs visible)",
          AP_COUNT);
+    /* Auto-connect to saved home network on startup */
+    wifi_connect("NexOS_Home", "");
 }
 
 int wifi_scan(wifi_ap_t *out, int max) {

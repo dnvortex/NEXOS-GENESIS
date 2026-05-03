@@ -23,6 +23,7 @@ void launch_editor(void);
 void launch_visualizer(void);
 void launch_snake(void);
 void launch_sysmon(void);
+void launch_settings(void);
 
 static void action_restart(void) {
     __asm__ volatile("mov $0xFE, %%al\n out %%al, $0x64\n" ::: "eax");
@@ -78,6 +79,7 @@ static const app_item_t apps[] = {
     { "Visualizer", 'V', 0xF38BA8, launch_visualizer  },
     { "Snake",      'G', 0xA6E3A1, launch_snake       },
     { "Monitor",    'M', 0xCBA6F7, launch_sysmon      },
+    { "Settings",   'S', 0x89B4FA, launch_settings    },
 };
 #define APP_COUNT  ((int)(sizeof(apps)/sizeof(apps[0])))
 
