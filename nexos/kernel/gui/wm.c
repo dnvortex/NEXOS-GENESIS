@@ -38,26 +38,26 @@ static void wm_draw_window(window_t *win) {
     if (!win->visible || win->state == WIN_MINIMIZED) return;
 
     /* ── 3-layer graduated drop shadow ─────────────────────────────────── */
-    fb_fill_rect_blend(win->x + 10, win->y + 10, win->w, win->h, 0x000000, 55);
-    fb_fill_rect_blend(win->x +  6, win->y +  6, win->w, win->h, 0x000000, 35);
-    fb_fill_rect_blend(win->x +  2, win->y +  2, win->w, win->h, 0x000000, 16);
+    fb_fill_rect_blend(win->x + 10, win->y + 10, win->w, win->h, 0x000000, 42);
+    fb_fill_rect_blend(win->x +  6, win->y +  6, win->w, win->h, 0x000000, 24);
+    fb_fill_rect_blend(win->x +  2, win->y +  2, win->w, win->h, 0x000000, 10);
 
     /* ── Focus outer glow ring ──────────────────────────────────────────── */
     if (win->focused) {
         fb_fill_rect_blend(win->x - 3, win->y - 3,
-                           win->w + 6, win->h + 6, COL_BLUE, 26);
+                           win->w + 6, win->h + 6, COL_BLUE, 18);
         fb_fill_rect_blend(win->x - 1, win->y - 1,
-                           win->w + 2, win->h + 2, COL_BLUE, 50);
+                           win->w + 2, win->h + 2, COL_BLUE, 36);
     }
 
     /* ── Window frame ───────────────────────────────────────────────────── */
     uint32_t frame_c = win->focused ? COL_SURFACE2 : COL_SURFACE1;
     fb_fill_rounded_rect(win->x - 1, win->y - 1,
-                         win->w + 2, win->h + 2, 10, frame_c);
+                         win->w + 2, win->h + 2, 12, frame_c);
 
     /* ── Titlebar base ──────────────────────────────────────────────────── */
     uint32_t tb_col = win->focused ? 0x24253E : 0x1C1D30;
-    fb_fill_rounded_rect(win->x, win->y, win->w, WM_TITLEBAR_H, 8, tb_col);
+    fb_fill_rounded_rect(win->x, win->y, win->w, WM_TITLEBAR_H, 10, tb_col);
 
     /* Specular — bright overlay on upper half + single top-rim pixel */
     fb_fill_rect_blend(win->x + 8,  win->y,
@@ -67,7 +67,7 @@ static void wm_draw_window(window_t *win) {
     /* ── Focus left accent stripe + soft glow ───────────────────────────── */
     if (win->focused) {
         fb_fill_rect_blend(win->x, win->y + 8,
-                           5, WM_TITLEBAR_H - 16, COL_BLUE, 40);
+                           5, WM_TITLEBAR_H - 16, COL_BLUE, 28);
         fb_fill_rect(win->x, win->y + 8, 3, WM_TITLEBAR_H - 16, COL_BLUE);
     }
 

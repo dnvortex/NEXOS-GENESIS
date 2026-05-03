@@ -9,6 +9,8 @@ void irq_install_handler(int irq, void (*handler)(registers_t *));
 /* ── PS/2 state ────────────────────────────────────────────────────────── */
 static int     mouse_x;
 static int     mouse_y;
+static int     mouse_tx;
+static int     mouse_ty;
 static uint8_t mouse_btns;
 static uint8_t mouse_cycle;
 static uint8_t mouse_bytes[3];
@@ -80,13 +82,13 @@ static void mouse_irq_handler(registers_t *r) {
         /* 2× base speed + 50% boost on large deltas (|d| > 5) for fast flicks */
         dx = dx * 2 + (dx > 5 ? dx / 2 : dx < -5 ? dx / 2 : 0);
         dy = dy * 2 + (dy > 5 ? dy / 2 : dy < -5 ? dy / 2 : 0);
-        mouse_x += dx;
-        mouse_y += dy;
-        if (mouse_x < 0) mouse_x = 0;
-        if (mouse_y < 0) mouse_y = 0;
+        mouse_tx += dx;
+        mouse_ty += dy;
+        if (mouse_tx < 0) mouse_tx = 0;
+        if (mouse_ty < 0) mouse_ty = 0;
         if (fb.initialized) {
-            if (mouse_x >= (int)fb.width)  mouse_x = (int)fb.width  - 1;
-            if (mouse_y >= (int)fb.height) mouse_y = (int)fb.height - 1;
+            if (mouse_tx >= (int)fb.width)  mouse_tx = (int)fb.width  - 1;
+            if (mouse_ty >= (int)fb.height) mouse_ty = (int)fb.height - 1;
         }
         mouse_needs_redraw = 1;
     }
@@ -96,6 +98,8 @@ static void mouse_irq_handler(registers_t *r) {
 void mouse_init(void) {
     mouse_x = (int)(fb.initialized ? fb.width  / 2 : 512);
     mouse_y = (int)(fb.initialized ? fb.height / 2 : 384);
+    mouse_tx = mouse_x;
+    mouse_ty = mouse_y;
     mouse_cycle = 0; mouse_btns = 0;
 
     mouse_wait_write(); io_outb(0x64, 0xA8);
@@ -117,6 +121,16 @@ uint8_t mouse_get_btns(void) { return mouse_btns; }
 int     mouse_left(void)     { return mouse_btns & 1; }
 int     mouse_right(void)    { return mouse_btns & 2; }
 int     mouse_needs_update(void) {
+    if (mouse_x != mouse_tx) {
+        mouse_x += (mouse_tx - mouse_x) / 2;
+        if (mouse_x == mouse_tx) mouse_needs_redraw = 1;
+        return 1;
+    }
+    if (mouse_y != mouse_ty) {
+        mouse_y += (mouse_ty - mouse_y) / 2;
+        if (mouse_y == mouse_ty) mouse_needs_redraw = 1;
+        return 1;
+    }
     if (mouse_needs_redraw) { mouse_needs_redraw = 0; return 1; }
     return 0;
 }
