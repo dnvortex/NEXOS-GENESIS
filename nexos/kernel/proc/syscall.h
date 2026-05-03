@@ -210,6 +210,204 @@
 #define SYS_EXECVEAT        322
 #define SYS_STATX           332
 
+/* ── Linux x86_64 syscall numbers — complete table through 462 ──────────── */
+
+/* 134–139 */
+#define SYS_USELIB             134
+#define SYS_USTAT              136
+#define SYS_SYSFS_SC           139   /* sysfs(2) — filesystem type query */
+
+/* 153–159 */
+#define SYS_VHANGUP            153
+#define SYS_MODIFY_LDT         154
+#define SYS_PIVOT_ROOT         155
+#define SYS__SYSCTL            156
+#define SYS_ADJTIMEX           159
+
+/* 164–168 */
+#define SYS_SETTIMEOFDAY       164
+#define SYS_MOUNT              165
+#define SYS_UMOUNT2            166
+#define SYS_SWAPON             167
+#define SYS_SWAPOFF            168
+
+/* 171–185 */
+#define SYS_SETDOMAINNAME      171
+#define SYS_IOPL               172
+#define SYS_IOPERM             173
+#define SYS_CREATE_MODULE      174
+#define SYS_INIT_MODULE        175
+#define SYS_DELETE_MODULE      176
+#define SYS_GET_KERNEL_SYMS    177
+#define SYS_QUERY_MODULE       178
+#define SYS_QUOTACTL           179
+#define SYS_NFSSERVCTL         180
+#define SYS_GETPMSG            181
+#define SYS_PUTPMSG            182
+#define SYS_AFS_SYSCALL        183
+#define SYS_TUXCALL            184
+#define SYS_SECURITY           185
+
+/* 187–199 (readahead + xattr family) */
+#define SYS_READAHEAD          187
+#define SYS_SETXATTR           188
+#define SYS_LSETXATTR          189
+#define SYS_FSETXATTR          190
+#define SYS_GETXATTR           191
+#define SYS_LGETXATTR          192
+#define SYS_FGETXATTR          193
+#define SYS_LISTXATTR          194
+#define SYS_LLISTXATTR         195
+#define SYS_FLISTXATTR         196
+#define SYS_REMOVEXATTR        197
+#define SYS_LREMOVEXATTR       198
+#define SYS_FREMOVEXATTR       199
+
+/* 205–216 */
+#define SYS_SET_THREAD_AREA    205
+#define SYS_IO_SETUP           206
+#define SYS_IO_DESTROY         207
+#define SYS_IO_GETEVENTS       208
+#define SYS_IO_SUBMIT          209
+#define SYS_IO_CANCEL          210
+#define SYS_GET_THREAD_AREA    211
+#define SYS_LOOKUP_DCOOKIE     212
+#define SYS_EPOLL_CTL_OLD      214
+#define SYS_EPOLL_WAIT_OLD     215
+#define SYS_REMAP_FILE_PAGES   216
+
+/* 219–227 */
+#define SYS_RESTART_SYSCALL    219
+#define SYS_SEMTIMEDOP         220
+#define SYS_FADVISE64          221
+#define SYS_TIMER_CREATE       222
+#define SYS_TIMER_SETTIME      223
+#define SYS_TIMER_GETTIME      224
+#define SYS_TIMER_GETOVERRUN   225
+#define SYS_TIMER_DELETE       226
+#define SYS_CLOCK_SETTIME      227
+
+/* 236–256 */
+#define SYS_VSERVER            236
+#define SYS_MBIND              237
+#define SYS_SET_MEMPOLICY      238
+#define SYS_GET_MEMPOLICY      239
+#define SYS_MQ_OPEN            240
+#define SYS_MQ_UNLINK          241
+#define SYS_MQ_TIMEDSEND       242
+#define SYS_MQ_TIMEDRECEIVE    243
+#define SYS_MQ_NOTIFY          244
+#define SYS_MQ_GETSETATTR      245
+#define SYS_KEXEC_LOAD         246
+#define SYS_WAITID             247
+#define SYS_ADD_KEY            248
+#define SYS_REQUEST_KEY        249
+#define SYS_KEYCTL             250
+#define SYS_IOPRIO_SET         251
+#define SYS_IOPRIO_GET         252
+#define SYS_INOTIFY_INIT       253
+#define SYS_INOTIFY_ADD_WATCH  254
+#define SYS_INOTIFY_RM_WATCH   255
+#define SYS_MIGRATE_PAGES      256
+
+/* 261 */
+#define SYS_FUTIMESAT          261
+
+/* 274–299 */
+#define SYS_GET_ROBUST_LIST    274
+#define SYS_SPLICE             275
+#define SYS_TEE                276
+#define SYS_SYNC_FILE_RANGE    277
+#define SYS_VMSPLICE           278
+#define SYS_MOVE_PAGES         279
+#define SYS_EPOLL_PWAIT        281
+#define SYS_SIGNALFD           282
+#define SYS_TIMERFD_CREATE     283
+#define SYS_EVENTFD            284
+#define SYS_TIMERFD_SETTIME    286
+#define SYS_TIMERFD_GETTIME    287
+#define SYS_ACCEPT4            288
+#define SYS_SIGNALFD4          289
+#define SYS_INOTIFY_INIT1      294
+#define SYS_PREADV             295
+#define SYS_PWRITEV            296
+#define SYS_RT_TGSIGQUEUEINFO  297
+#define SYS_PERF_EVENT_OPEN    298
+#define SYS_RECVMMSG           299
+
+/* 301–334 */
+#define SYS_FANOTIFY_MARK      301
+#define SYS_NAME_TO_HANDLE_AT  303
+#define SYS_OPEN_BY_HANDLE_AT  304
+#define SYS_CLOCK_ADJTIME      305
+#define SYS_SYNCFS             306
+#define SYS_SENDMMSG           307
+#define SYS_SETNS              308
+#define SYS_GETCPU             309
+#define SYS_PROCESS_VM_READV   310
+#define SYS_PROCESS_VM_WRITEV  311
+#define SYS_KCMP               312
+#define SYS_FINIT_MODULE       313
+#define SYS_SCHED_SETATTR      314
+#define SYS_SCHED_GETATTR      315
+#define SYS_RENAMEAT2          316
+#define SYS_SECCOMP            317
+#define SYS_MEMFD_CREATE       319
+#define SYS_KEXEC_FILE_LOAD    320
+#define SYS_BPF                321
+#define SYS_USERFAULTFD        323
+#define SYS_MEMBARRIER         324
+#define SYS_MLOCK2             325
+#define SYS_COPY_FILE_RANGE    326
+#define SYS_PREADV2            327
+#define SYS_PWRITEV2           328
+#define SYS_PKEY_MPROTECT      329
+#define SYS_PKEY_ALLOC         330
+#define SYS_PKEY_FREE          331
+#define SYS_IO_PGETEVENTS      333
+#define SYS_RSEQ               334
+
+/* ── Linux 5.1+ (new-style numbering starting at 424) ───────────────────── */
+#define SYS_PIDFD_SEND_SIGNAL       424
+#define SYS_IO_URING_SETUP          425
+#define SYS_IO_URING_ENTER          426
+#define SYS_IO_URING_REGISTER       427
+#define SYS_OPEN_TREE               428
+#define SYS_MOVE_MOUNT_SC           429
+#define SYS_FSOPEN                  430
+#define SYS_FSCONFIG                431
+#define SYS_FSMOUNT                 432
+#define SYS_FSPICK                  433
+#define SYS_PIDFD_OPEN              434
+#define SYS_CLONE3                  435
+#define SYS_CLOSE_RANGE             436
+#define SYS_OPENAT2                 437
+#define SYS_PIDFD_GETFD             438
+#define SYS_FACCESSAT2              439
+#define SYS_PROCESS_MADVISE         440
+#define SYS_EPOLL_PWAIT2            441
+#define SYS_MOUNT_SETATTR           442
+#define SYS_QUOTACTL_FD             443
+#define SYS_LANDLOCK_CREATE_RULESET 444
+#define SYS_LANDLOCK_ADD_RULE       445
+#define SYS_LANDLOCK_RESTRICT_SELF  446
+#define SYS_MEMFD_SECRET            447
+#define SYS_PROCESS_MRELEASE        448
+#define SYS_FUTEX_WAITV             449
+#define SYS_SET_MEMPOLICY_HOME_NODE 450
+#define SYS_CACHESTAT               451
+#define SYS_FCHMODAT2               452
+#define SYS_MAP_SHADOW_STACK        453
+#define SYS_FUTEX_WAKE              454
+#define SYS_FUTEX_WAIT_SC           455
+#define SYS_FUTEX_REQUEUE           456
+#define SYS_STATMOUNT               457
+#define SYS_LISTMOUNT               458
+#define SYS_LSM_GET_SELF_ATTR       459
+#define SYS_LSM_SET_SELF_ATTR       460
+#define SYS_LSM_LIST_MODULES        461
+#define SYS_MSEAL                   462
+
 /* ── NexOS-specific (above Linux range, won't conflict) ─────────────────── */
 #define SYS_SLEEP           300   /* timer_sleep_ms(ms) */
 

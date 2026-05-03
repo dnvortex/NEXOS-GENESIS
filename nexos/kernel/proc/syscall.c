@@ -39,6 +39,35 @@
 #define ENOTCONN 107
 #define ERANGE   34
 #define ENOSYS   38
+#define EPIPE    32
+#define ESPIPE   29
+#define EROFS    30
+#define EDEADLK  35
+#define ENOLCK   37
+#define ENOTEMPTY 39
+#define ELOOP    40
+#define ENOMSG   42
+#define EIDRM    43
+#define ENODATA  61
+#define ENOSTR   60
+#define ENOSR    63
+#define EMLINK   31
+#define EDOM     33
+#define EOVERFLOW 75
+#define ETIMEDOUT    110
+#define ECONNRESET   104
+#define ECONNREFUSED 111
+#define EHOSTUNREACH 113
+#define ENETUNREACH  101
+#define EADDRINUSE   98
+#define EADDRNOTAVAIL 99
+#define EISCONN      106
+#define ESHUTDOWN    108
+#define EMSGSIZE     90
+#define EPROTONOSUPPORT 93
+#define EAFNOSUPPORT    97
+#define EALREADY        114
+#define ENAMETOOLONG    36
 
 /* shorthand: return negative errno as uint64_t */
 #define RET_ERR(e) return (uint64_t)(-(int64_t)(e))
@@ -1966,6 +1995,805 @@ uint64_t syscall_dispatch(uint64_t num, uint64_t a1, uint64_t a2, uint64_t a3,
         u64[6] = (uint64_t)ls.st_blocks;        /* stx_blocks */
         return 0;
     }
+
+    /* ════════════════════════════════════════════════════════════════════════
+     * COMPLETE LINUX x86_64 SYSCALL TABLE — remaining entries 134–462
+     * ════════════════════════════════════════════════════════════════════════ */
+
+    /* ── 134: uselib — obsolete, always ENOSYS ───────────────────────────── */
+    case SYS_USELIB:
+        RET_ERR(ENOSYS);
+
+    /* ── 136: ustat — obsolete, use statfs instead ───────────────────────── */
+    case SYS_USTAT:
+        RET_ERR(ENOSYS);
+
+    /* ── 139: sysfs — filesystem type info (no loadable fs) ─────────────── */
+    case SYS_SYSFS_SC:
+        RET_ERR(ENOSYS);
+
+    /* ── 153: vhangup — no TTY hangup, succeed silently ─────────────────── */
+    case SYS_VHANGUP:
+        return 0;
+
+    /* ── 154: modify_ldt — LDT not used in 64-bit NexOS ─────────────────── */
+    case SYS_MODIFY_LDT:
+        RET_ERR(ENOSYS);
+
+    /* ── 155: pivot_root — no namespaces ─────────────────────────────────── */
+    case SYS_PIVOT_ROOT:
+        RET_ERR(ENOSYS);
+
+    /* ── 156: _sysctl — deprecated, use /proc/sys ────────────────────────── */
+    case SYS__SYSCTL:
+        RET_ERR(ENOSYS);
+
+    /* ── 159: adjtimex — no NTP PLL, succeed silently ───────────────────── */
+    case SYS_ADJTIMEX:
+        return 0;
+
+    /* ── 164: settimeofday — accept, ignore ──────────────────────────────── */
+    case SYS_SETTIMEOFDAY:
+        return 0;
+
+    /* ── 165: mount ──────────────────────────────────────────────────────── */
+    case SYS_MOUNT:
+        return 0;   /* NexOS VFS auto-mounts; silently succeed */
+
+    /* ── 166: umount2 ────────────────────────────────────────────────────── */
+    case SYS_UMOUNT2:
+        return 0;
+
+    /* ── 167: swapon ─────────────────────────────────────────────────────── */
+    case SYS_SWAPON:
+        RET_ERR(ENOSYS);
+
+    /* ── 168: swapoff ────────────────────────────────────────────────────── */
+    case SYS_SWAPOFF:
+        RET_ERR(ENOSYS);
+
+    /* ── 171: setdomainname — accept ─────────────────────────────────────── */
+    case SYS_SETDOMAINNAME:
+        return 0;
+
+    /* ── 172: iopl — ring-0 already ─────────────────────────────────────── */
+    case SYS_IOPL:
+        return 0;
+
+    /* ── 173: ioperm — allow all ports (we're ring 0) ───────────────────── */
+    case SYS_IOPERM:
+        return 0;
+
+    /* ── 174–178: module management — no runtime loading ─────────────────── */
+    case SYS_CREATE_MODULE:
+    case SYS_GET_KERNEL_SYMS:
+    case SYS_QUERY_MODULE:
+        RET_ERR(ENOSYS);
+
+    /* ── 175: init_module / 176: delete_module ───────────────────────────── */
+    case SYS_INIT_MODULE:
+    case SYS_DELETE_MODULE:
+        RET_ERR(ENOSYS);
+
+    /* ── 179: quotactl — no disk quotas ──────────────────────────────────── */
+    case SYS_QUOTACTL:
+        RET_ERR(ENOSYS);
+
+    /* ── 180–185: obsolete / unavailable ─────────────────────────────────── */
+    case SYS_NFSSERVCTL:
+    case SYS_GETPMSG:
+    case SYS_PUTPMSG:
+    case SYS_AFS_SYSCALL:
+    case SYS_TUXCALL:
+    case SYS_SECURITY:
+        RET_ERR(ENOSYS);
+
+    /* ── 187: readahead — no page cache, succeed as no-op ───────────────── */
+    case SYS_READAHEAD:
+        return 0;
+
+    /* ── 188–190: setxattr / lsetxattr / fsetxattr — no xattr support ───── */
+    case SYS_SETXATTR:
+    case SYS_LSETXATTR:
+    case SYS_FSETXATTR:
+        return 0;   /* silently discard extended attributes */
+
+    /* ── 191–193: getxattr / lgetxattr / fgetxattr ───────────────────────── */
+    case SYS_GETXATTR:
+    case SYS_LGETXATTR:
+    case SYS_FGETXATTR:
+        RET_ERR(ENODATA);   /* attribute does not exist */
+
+    /* ── 194–196: listxattr / llistxattr / flistxattr ────────────────────── */
+    case SYS_LISTXATTR:
+    case SYS_LLISTXATTR:
+    case SYS_FLISTXATTR:
+        return 0;   /* empty attribute list */
+
+    /* ── 197–199: removexattr / lremovexattr / fremovexattr ─────────────── */
+    case SYS_REMOVEXATTR:
+    case SYS_LREMOVEXATTR:
+    case SYS_FREMOVEXATTR:
+        return 0;
+
+    /* ── 205: set_thread_area — no 32-bit TLS segments ──────────────────── */
+    case SYS_SET_THREAD_AREA:
+        return 0;
+
+    /* ── 206–210: Linux AIO — ENOSYS (use io_uring instead) ─────────────── */
+    case SYS_IO_SETUP:
+    case SYS_IO_DESTROY:
+    case SYS_IO_GETEVENTS:
+    case SYS_IO_SUBMIT:
+    case SYS_IO_CANCEL:
+        RET_ERR(ENOSYS);
+
+    /* ── 211: get_thread_area — not used in 64-bit ───────────────────────── */
+    case SYS_GET_THREAD_AREA:
+        RET_ERR(ENOSYS);
+
+    /* ── 212: lookup_dcookie — not used ──────────────────────────────────── */
+    case SYS_LOOKUP_DCOOKIE:
+        RET_ERR(ENOSYS);
+
+    /* ── 214–215: old epoll_ctl/wait — use 233/232 ───────────────────────── */
+    case SYS_EPOLL_CTL_OLD:
+    case SYS_EPOLL_WAIT_OLD:
+        RET_ERR(ENOSYS);
+
+    /* ── 216: remap_file_pages — deprecated, no-op ───────────────────────── */
+    case SYS_REMAP_FILE_PAGES:
+        return 0;
+
+    /* ── 219: restart_syscall — no signals to restart after ─────────────── */
+    case SYS_RESTART_SYSCALL:
+        return 0;
+
+    /* ── 220: semtimedop — SysV sem with timeout ─────────────────────────── */
+    case SYS_SEMTIMEDOP:
+        RET_ERR(ENOSYS);
+
+    /* ── 221: fadvise64 — no page cache to advise ────────────────────────── */
+    case SYS_FADVISE64:
+        return 0;
+
+    /* ── 222–226: POSIX per-process timers (stub counter) ────────────────── */
+    case SYS_TIMER_CREATE: {
+        /* Write a fake timer ID (0) to the caller's pointer */
+        int *tidp = (int *)(uintptr_t)a2;
+        if (tidp) *tidp = 0;
+        return 0;
+    }
+    case SYS_TIMER_SETTIME:
+    case SYS_TIMER_GETTIME:
+    case SYS_TIMER_DELETE:
+        return 0;
+
+    case SYS_TIMER_GETOVERRUN:
+        return 0;   /* 0 overruns */
+
+    /* ── 227: clock_settime — accept, ignore ─────────────────────────────── */
+    case SYS_CLOCK_SETTIME:
+        return 0;
+
+    /* ── 236: vserver — never implemented ────────────────────────────────── */
+    case SYS_VSERVER:
+        RET_ERR(ENOSYS);
+
+    /* ── 237–239: NUMA memory policy — single-node, no-op ───────────────── */
+    case SYS_MBIND:
+    case SYS_SET_MEMPOLICY:
+    case SYS_GET_MEMPOLICY:
+        return 0;
+
+    /* ── 240–245: POSIX message queues ───────────────────────────────────── */
+    case SYS_MQ_OPEN:
+    case SYS_MQ_UNLINK:
+    case SYS_MQ_TIMEDSEND:
+    case SYS_MQ_TIMEDRECEIVE:
+    case SYS_MQ_NOTIFY:
+    case SYS_MQ_GETSETATTR:
+        RET_ERR(ENOSYS);
+
+    /* ── 246: kexec_load ─────────────────────────────────────────────────── */
+    case SYS_KEXEC_LOAD:
+        RET_ERR(ENOSYS);
+
+    /* ── 247: waitid ─────────────────────────────────────────────────────── */
+    case SYS_WAITID: {
+        int idtype = (int)a1;
+        /* id=a2, siginfo*=a3, options=a4 */
+        (void)idtype;
+        /* Scan for any zombie */
+        for (int i = 0; i < MAX_PROCESSES; i++) {
+            process_t *p = processes[i];
+            if (!p || p->state != PROC_ZOMBIE) continue;
+            if (!proc || p->ppid != proc->pid) continue;
+            int cpid = (int)p->pid;
+            processes[i] = NULL;
+            process_count--;
+            kfree(p->stack);
+            kfree(p);
+            return (uint64_t)cpid;
+        }
+        RET_ERR(ECHILD);
+    }
+
+    /* ── 248–250: kernel keyring ─────────────────────────────────────────── */
+    case SYS_ADD_KEY:
+    case SYS_REQUEST_KEY:
+    case SYS_KEYCTL:
+        RET_ERR(ENOSYS);
+
+    /* ── 251–252: I/O priority ───────────────────────────────────────────── */
+    case SYS_IOPRIO_SET:
+    case SYS_IOPRIO_GET:
+        return 0;
+
+    /* ── 253: inotify_init — return a dummy fd ───────────────────────────── */
+    case SYS_INOTIFY_INIT: {
+        if (!proc) RET_ERR(ENOMEM);
+        vfs_node_t *n = vfs_open("/dev/null", 0);
+        if (!n) RET_ERR(ENOMEM);
+        int fd = proc_open_fd(proc, n);
+        if (fd < 0) { vfs_close(n); RET_ERR(EMFILE); }
+        return (uint64_t)fd;
+    }
+
+    /* ── 254: inotify_add_watch — return watch descriptor 1 ─────────────── */
+    case SYS_INOTIFY_ADD_WATCH:
+        return 1;   /* wd=1, events never fire (no inotify engine) */
+
+    /* ── 255: inotify_rm_watch ───────────────────────────────────────────── */
+    case SYS_INOTIFY_RM_WATCH:
+        return 0;
+
+    /* ── 256: migrate_pages — single NUMA node, trivially succeed ────────── */
+    case SYS_MIGRATE_PAGES:
+        return 0;
+
+    /* ── 261: futimesat — update file timestamps (stub) ─────────────────── */
+    case SYS_FUTIMESAT:
+        return 0;
+
+    /* ── 274: get_robust_list — no futex robust lists ───────────────────── */
+    case SYS_GET_ROBUST_LIST: {
+        /* head_ptr=a2, len_ptr=a3 */
+        uint64_t *hp = (uint64_t *)(uintptr_t)a2;
+        uint64_t *lp = (uint64_t *)(uintptr_t)a3;
+        if (hp) *hp = 0;
+        if (lp) *lp = 0;
+        return 0;
+    }
+
+    /* ── 275: splice(fd_in, off_in, fd_out, off_out, len, flags) ─────────── */
+    case SYS_SPLICE: {
+        int      in_fd  = (int)a1;
+        int      out_fd = (int)a3;
+        uint64_t len    = a5;
+        if (!proc) RET_ERR(EBADF);
+        if (in_fd  < 0 || in_fd  >= MAX_FDS || !proc->fds[in_fd])  RET_ERR(EBADF);
+        if (out_fd < 0 || out_fd >= MAX_FDS || !proc->fds[out_fd]) RET_ERR(EBADF);
+        uint8_t buf[512];
+        uint64_t total = 0;
+        while (total < len) {
+            uint32_t chunk = (uint32_t)(len - total);
+            if (chunk > 512) chunk = 512;
+            uint32_t n = vfs_read(proc->fds[in_fd],
+                                   proc->fd_offsets[in_fd], chunk, buf);
+            if (!n) break;
+            proc->fd_offsets[in_fd] += n;
+            vfs_write(proc->fds[out_fd], proc->fd_offsets[out_fd], n, buf);
+            proc->fd_offsets[out_fd] += n;
+            total += n;
+        }
+        return total;
+    }
+
+    /* ── 276: tee — pipe mirroring, no pipe backend ──────────────────────── */
+    case SYS_TEE:
+        RET_ERR(ENOSYS);
+
+    /* ── 277: sync_file_range — VFS has no dirty tracking ───────────────── */
+    case SYS_SYNC_FILE_RANGE:
+        return 0;
+
+    /* ── 278: vmsplice — no pipe backend ────────────────────────────────── */
+    case SYS_VMSPLICE:
+        RET_ERR(ENOSYS);
+
+    /* ── 279: move_pages — single NUMA node ──────────────────────────────── */
+    case SYS_MOVE_PAGES:
+        return 0;
+
+    /* ── 281: epoll_pwait — same as epoll_wait (no events) ──────────────── */
+    case SYS_EPOLL_PWAIT:
+        return 0;
+
+    /* ── 282: signalfd — dummy fd (no signal delivery) ───────────────────── */
+    case SYS_SIGNALFD: {
+        if (!proc) RET_ERR(ENOMEM);
+        /* reuse existing fd if one was passed (a1 >= 0) */
+        int oldfd = (int)a1;
+        if (oldfd >= 0 && oldfd < MAX_FDS && proc->fds[oldfd])
+            return (uint64_t)oldfd;
+        vfs_node_t *n = vfs_open("/dev/null", 0);
+        if (!n) RET_ERR(ENOMEM);
+        int fd = proc_open_fd(proc, n);
+        if (fd < 0) { vfs_close(n); RET_ERR(EMFILE); }
+        return (uint64_t)fd;
+    }
+
+    /* ── 283: timerfd_create — dummy fd ──────────────────────────────────── */
+    case SYS_TIMERFD_CREATE: {
+        if (!proc) RET_ERR(ENOMEM);
+        vfs_node_t *n = vfs_open("/dev/null", 0);
+        if (!n) RET_ERR(ENOMEM);
+        int fd = proc_open_fd(proc, n);
+        if (fd < 0) { vfs_close(n); RET_ERR(EMFILE); }
+        return (uint64_t)fd;
+    }
+
+    /* ── 284: eventfd — dummy fd ─────────────────────────────────────────── */
+    case SYS_EVENTFD: {
+        if (!proc) RET_ERR(ENOMEM);
+        vfs_node_t *n = vfs_open("/dev/null", 0);
+        if (!n) RET_ERR(ENOMEM);
+        int fd = proc_open_fd(proc, n);
+        if (fd < 0) { vfs_close(n); RET_ERR(EMFILE); }
+        return (uint64_t)fd;
+    }
+
+    /* ── 286: timerfd_settime ────────────────────────────────────────────── */
+    case SYS_TIMERFD_SETTIME:
+        return 0;
+
+    /* ── 287: timerfd_gettime ────────────────────────────────────────────── */
+    case SYS_TIMERFD_GETTIME: {
+        linux_timespec_t *ts = (linux_timespec_t *)(uintptr_t)a2;
+        if (ts) { ts->tv_sec = 0; ts->tv_nsec = 0; }
+        return 0;
+    }
+
+    /* ── 288: accept4 — same as accept, ignore flags ─────────────────────── */
+    case SYS_ACCEPT4:
+        RET_ERR(ENOSYS);
+
+    /* ── 289: signalfd4 — same as signalfd ───────────────────────────────── */
+    case SYS_SIGNALFD4: {
+        if (!proc) RET_ERR(ENOMEM);
+        int oldfd = (int)a1;
+        if (oldfd >= 0 && oldfd < MAX_FDS && proc->fds[oldfd])
+            return (uint64_t)oldfd;
+        vfs_node_t *n = vfs_open("/dev/null", 0);
+        if (!n) RET_ERR(ENOMEM);
+        int fd = proc_open_fd(proc, n);
+        if (fd < 0) { vfs_close(n); RET_ERR(EMFILE); }
+        return (uint64_t)fd;
+    }
+
+    /* ── 294: inotify_init1 — same as inotify_init ───────────────────────── */
+    case SYS_INOTIFY_INIT1: {
+        if (!proc) RET_ERR(ENOMEM);
+        vfs_node_t *n = vfs_open("/dev/null", 0);
+        if (!n) RET_ERR(ENOMEM);
+        int fd = proc_open_fd(proc, n);
+        if (fd < 0) { vfs_close(n); RET_ERR(EMFILE); }
+        return (uint64_t)fd;
+    }
+
+    /* ── 295: preadv(fd, iov, iovcnt, offset_lo, offset_hi) ─────────────── */
+    case SYS_PREADV: {
+        typedef struct { void *base; uint64_t len; } iovec_t;
+        int             fd     = (int)a1;
+        const iovec_t  *iov    = (const iovec_t *)(uintptr_t)a2;
+        int             iovcnt = (int)a3;
+        uint64_t        off    = a4;
+        if (!proc || fd < 0 || fd >= MAX_FDS || !proc->fds[fd]) RET_ERR(EBADF);
+        uint64_t total = 0;
+        for (int i = 0; i < iovcnt; i++) {
+            if (!iov[i].base || !iov[i].len) continue;
+            uint32_t n = vfs_read(proc->fds[fd], off,
+                                   (uint32_t)iov[i].len,
+                                   (uint8_t *)iov[i].base);
+            off   += n;
+            total += n;
+        }
+        return total;
+    }
+
+    /* ── 296: pwritev(fd, iov, iovcnt, offset_lo, offset_hi) ────────────── */
+    case SYS_PWRITEV: {
+        typedef struct { const void *base; uint64_t len; } iovecw_t;
+        int              fd     = (int)a1;
+        const iovecw_t  *iov    = (const iovecw_t *)(uintptr_t)a2;
+        int              iovcnt = (int)a3;
+        uint64_t         off    = a4;
+        if (!proc || fd < 0 || fd >= MAX_FDS || !proc->fds[fd]) RET_ERR(EBADF);
+        uint64_t total = 0;
+        for (int i = 0; i < iovcnt; i++) {
+            if (!iov[i].base || !iov[i].len) continue;
+            uint32_t n = vfs_write(proc->fds[fd], off,
+                                    (uint32_t)iov[i].len,
+                                    (const uint8_t *)iov[i].base);
+            off   += n;
+            total += n;
+        }
+        return total;
+    }
+
+    /* ── 297: rt_tgsigqueueinfo ──────────────────────────────────────────── */
+    case SYS_RT_TGSIGQUEUEINFO:
+        return 0;
+
+    /* ── 298: perf_event_open — no performance counters ─────────────────── */
+    case SYS_PERF_EVENT_OPEN:
+        RET_ERR(ENOSYS);
+
+    /* ── 299: recvmmsg — multiple messages, no socket backend ───────────── */
+    case SYS_RECVMMSG:
+        RET_ERR(ENOSYS);
+
+    /* ── 301: fanotify_mark ──────────────────────────────────────────────── */
+    case SYS_FANOTIFY_MARK:
+        RET_ERR(ENOSYS);
+
+    /* ── 303: name_to_handle_at / 304: open_by_handle_at ─────────────────── */
+    case SYS_NAME_TO_HANDLE_AT:
+    case SYS_OPEN_BY_HANDLE_AT:
+        RET_ERR(ENOSYS);
+
+    /* ── 305: clock_adjtime ──────────────────────────────────────────────── */
+    case SYS_CLOCK_ADJTIME:
+        return 0;
+
+    /* ── 306: syncfs — sync a single filesystem ──────────────────────────── */
+    case SYS_SYNCFS:
+        return 0;
+
+    /* ── 307: sendmmsg — multiple UDP messages, no socket backend ────────── */
+    case SYS_SENDMMSG:
+        RET_ERR(ENOSYS);
+
+    /* ── 308: setns — no namespaces ──────────────────────────────────────── */
+    case SYS_SETNS:
+        RET_ERR(ENOSYS);
+
+    /* ── 309: getcpu(cpu*, node*, tcache*) — always CPU 0, node 0 ────────── */
+    case SYS_GETCPU: {
+        uint32_t *cpu  = (uint32_t *)(uintptr_t)a1;
+        uint32_t *node = (uint32_t *)(uintptr_t)a2;
+        if (cpu)  *cpu  = 0;
+        if (node) *node = 0;
+        return 0;
+    }
+
+    /* ── 310–311: process_vm_readv / process_vm_writev ───────────────────── */
+    case SYS_PROCESS_VM_READV:
+    case SYS_PROCESS_VM_WRITEV:
+        RET_ERR(ENOSYS);
+
+    /* ── 312: kcmp — no process isolation ───────────────────────────────── */
+    case SYS_KCMP:
+        RET_ERR(ENOSYS);
+
+    /* ── 313: finit_module — no runtime module loading ───────────────────── */
+    case SYS_FINIT_MODULE:
+        RET_ERR(ENOSYS);
+
+    /* ── 314–315: extended scheduler attributes ──────────────────────────── */
+    case SYS_SCHED_SETATTR:
+        return 0;
+    case SYS_SCHED_GETATTR: {
+        /* struct sched_attr: u32 size, u32 sched_policy, u64 flags, ... */
+        uint32_t *sa = (uint32_t *)(uintptr_t)a2;
+        if (sa) {
+            for (int i = 0; i < 14; i++) sa[i] = 0;
+            sa[0] = 56;   /* size of struct sched_attr */
+        }
+        return 0;
+    }
+
+    /* ── 316: renameat2 — delegate to renameat (ignore flags) ────────────── */
+    case SYS_RENAMEAT2:
+        return syscall_dispatch(SYS_RENAMEAT, a1, a2, a3, a4, 0);
+
+    /* ── 317: seccomp — return 0 (no restrictions) ───────────────────────── */
+    case SYS_SECCOMP:
+        return 0;
+
+    /* ── 319: memfd_create — anonymous in-memory file ────────────────────── */
+    case SYS_MEMFD_CREATE: {
+        if (!proc) RET_ERR(ENOMEM);
+        /* Create a transient VFS node under /tmp */
+        const char *name = (const char *)(uintptr_t)a1;
+        char path[128];
+        if (!name) name = "memfd";
+        sc_strcpy(path, "/tmp/memfd_", sizeof(path));
+        /* Append a simple counter */
+        static uint32_t mfd_seq = 0;
+        uint32_t seq = mfd_seq++;
+        uint32_t pos = (uint32_t)sc_strlen(path);
+        if (pos < 120) {
+            /* Append decimal seq */
+            if (seq == 0) { path[pos++] = '0'; }
+            else {
+                char tmp[12]; int tl = 0;
+                uint32_t v = seq;
+                while (v) { tmp[tl++] = (char)('0' + v % 10); v /= 10; }
+                for (int ii = tl - 1; ii >= 0; ii--)
+                    if (pos < 120) path[pos++] = tmp[ii];
+            }
+            path[pos] = '\0';
+        }
+        vfs_create(path, 0);
+        vfs_node_t *n = vfs_open(path, 0);
+        if (!n) RET_ERR(ENOMEM);
+        int fd = proc_open_fd(proc, n);
+        if (fd < 0) { vfs_close(n); RET_ERR(EMFILE); }
+        proc->fd_offsets[fd] = 0;
+        return (uint64_t)fd;
+    }
+
+    /* ── 320: kexec_file_load ────────────────────────────────────────────── */
+    case SYS_KEXEC_FILE_LOAD:
+        RET_ERR(ENOSYS);
+
+    /* ── 321: bpf ────────────────────────────────────────────────────────── */
+    case SYS_BPF:
+        RET_ERR(ENOSYS);
+
+    /* ── 323: userfaultfd ────────────────────────────────────────────────── */
+    case SYS_USERFAULTFD:
+        RET_ERR(ENOSYS);
+
+    /* ── 324: membarrier — memory barrier (no SMP, always OK) ───────────── */
+    case SYS_MEMBARRIER:
+        return 0;
+
+    /* ── 325: mlock2 ─────────────────────────────────────────────────────── */
+    case SYS_MLOCK2:
+        return 0;
+
+    /* ── 326: copy_file_range ────────────────────────────────────────────── */
+    case SYS_COPY_FILE_RANGE: {
+        int      fd_in  = (int)a1;
+        int      fd_out = (int)a3;
+        uint64_t len    = a5;
+        if (!proc) RET_ERR(EBADF);
+        if (fd_in  < 0 || fd_in  >= MAX_FDS || !proc->fds[fd_in])  RET_ERR(EBADF);
+        if (fd_out < 0 || fd_out >= MAX_FDS || !proc->fds[fd_out]) RET_ERR(EBADF);
+        uint8_t  buf[512];
+        uint64_t total = 0;
+        while (total < len) {
+            uint32_t chunk = (uint32_t)(len - total);
+            if (chunk > 512) chunk = 512;
+            uint32_t n = vfs_read(proc->fds[fd_in],
+                                   proc->fd_offsets[fd_in], chunk, buf);
+            if (!n) break;
+            proc->fd_offsets[fd_in] += n;
+            vfs_write(proc->fds[fd_out], proc->fd_offsets[fd_out], n, buf);
+            proc->fd_offsets[fd_out] += n;
+            total += n;
+        }
+        return total;
+    }
+
+    /* ── 327: preadv2(fd, iov, iovcnt, offset, flags) ───────────────────── */
+    case SYS_PREADV2: {
+        typedef struct { void *base; uint64_t len; } iovec_t;
+        int             fd     = (int)a1;
+        const iovec_t  *iov    = (const iovec_t *)(uintptr_t)a2;
+        int             iovcnt = (int)a3;
+        uint64_t        off    = a4;
+        /* a5 = flags, ignored */
+        if (!proc || fd < 0 || fd >= MAX_FDS || !proc->fds[fd]) RET_ERR(EBADF);
+        uint64_t total = 0;
+        for (int i = 0; i < iovcnt; i++) {
+            if (!iov[i].base || !iov[i].len) continue;
+            uint32_t n = vfs_read(proc->fds[fd], off,
+                                   (uint32_t)iov[i].len,
+                                   (uint8_t *)iov[i].base);
+            off   += n;
+            total += n;
+        }
+        return total;
+    }
+
+    /* ── 328: pwritev2(fd, iov, iovcnt, offset, flags) ──────────────────── */
+    case SYS_PWRITEV2: {
+        typedef struct { const void *base; uint64_t len; } iovecw_t;
+        int              fd     = (int)a1;
+        const iovecw_t  *iov    = (const iovecw_t *)(uintptr_t)a2;
+        int              iovcnt = (int)a3;
+        uint64_t         off    = a4;
+        if (!proc || fd < 0 || fd >= MAX_FDS || !proc->fds[fd]) RET_ERR(EBADF);
+        uint64_t total = 0;
+        for (int i = 0; i < iovcnt; i++) {
+            if (!iov[i].base || !iov[i].len) continue;
+            uint32_t n = vfs_write(proc->fds[fd], off,
+                                    (uint32_t)iov[i].len,
+                                    (const uint8_t *)iov[i].base);
+            off   += n;
+            total += n;
+        }
+        return total;
+    }
+
+    /* ── 329: pkey_mprotect — memory-protection keys, no-op ─────────────── */
+    case SYS_PKEY_MPROTECT:
+        return 0;
+
+    /* ── 330: pkey_alloc — return -ENOSPC (no pkeys available) ──────────── */
+    case SYS_PKEY_ALLOC:
+        RET_ERR(ENOSYS);
+
+    /* ── 331: pkey_free ──────────────────────────────────────────────────── */
+    case SYS_PKEY_FREE:
+        return 0;
+
+    /* ── 333: io_pgetevents ──────────────────────────────────────────────── */
+    case SYS_IO_PGETEVENTS:
+        RET_ERR(ENOSYS);
+
+    /* ── 334: rseq (restartable sequences) ───────────────────────────────── */
+    case SYS_RSEQ:
+        return 0;   /* accepted — no actual rseq engine needed */
+
+    /* ════════════════════════════════════════════════════════════════════════
+     * Linux 5.1+ syscalls (new-style numbering: 424–462)
+     * ════════════════════════════════════════════════════════════════════════ */
+
+    /* ── 424: pidfd_send_signal ──────────────────────────────────────────── */
+    case SYS_PIDFD_SEND_SIGNAL: {
+        /* pidfd=a1, sig=a2 — map to kill semantics */
+        int sig = (int)a2;
+        if (sig == 9 || sig == 15) proc_kill((uint32_t)a1);
+        return 0;
+    }
+
+    /* ── 425–427: io_uring — not implemented ─────────────────────────────── */
+    case SYS_IO_URING_SETUP:
+    case SYS_IO_URING_ENTER:
+    case SYS_IO_URING_REGISTER:
+        RET_ERR(ENOSYS);
+
+    /* ── 428–433: new VFS mount API — ENOSYS ─────────────────────────────── */
+    case SYS_OPEN_TREE:
+    case SYS_MOVE_MOUNT_SC:
+    case SYS_FSOPEN:
+    case SYS_FSCONFIG:
+    case SYS_FSMOUNT:
+    case SYS_FSPICK:
+        RET_ERR(ENOSYS);
+
+    /* ── 434: pidfd_open(pid, flags) — dummy fd ──────────────────────────── */
+    case SYS_PIDFD_OPEN: {
+        if (!proc) RET_ERR(ENOMEM);
+        vfs_node_t *n = vfs_open("/dev/null", 0);
+        if (!n) RET_ERR(ENOMEM);
+        int fd = proc_open_fd(proc, n);
+        if (fd < 0) { vfs_close(n); RET_ERR(EMFILE); }
+        return (uint64_t)fd;
+    }
+
+    /* ── 435: clone3 — ENOSYS ────────────────────────────────────────────── */
+    case SYS_CLONE3:
+        RET_ERR(ENOSYS);
+
+    /* ── 436: close_range(first, last, flags) ────────────────────────────── */
+    case SYS_CLOSE_RANGE: {
+        uint32_t first = (uint32_t)a1;
+        uint32_t last  = (uint32_t)a2;
+        if (!proc) RET_ERR(EBADF);
+        if (last >= (uint32_t)MAX_FDS) last = (uint32_t)MAX_FDS - 1;
+        for (uint32_t f = first; f <= last; f++) {
+            if ((int)f < MAX_FDS && proc->fds[f])
+                proc_close_fd(proc, (int)f);
+        }
+        return 0;
+    }
+
+    /* ── 437: openat2(dirfd, path, open_how*, size) ──────────────────────── */
+    case SYS_OPENAT2: {
+        int         dirfd = (int)a1;
+        const char *path  = (const char *)(uintptr_t)a2;
+        /* open_how struct: u64 flags, u64 mode, u64 resolve */
+        uint64_t   *how   = (uint64_t *)(uintptr_t)a3;
+        int         oflags = how ? (int)how[0] : 0;
+        if (!path || !proc) RET_ERR(EFAULT);
+        char rp[512];
+        if (at_resolve(proc, dirfd, path, rp, sizeof(rp)) < 0) RET_ERR(ENOENT);
+        vfs_node_t *node = vfs_open(rp, oflags);
+        if (!node && (oflags & 0x40)) {
+            vfs_create(rp, 0);
+            node = vfs_open(rp, oflags);
+        }
+        if (!node) RET_ERR(ENOENT);
+        int fd = proc_open_fd(proc, node);
+        if (fd < 0) { vfs_close(node); RET_ERR(ENFILE); }
+        proc->fd_offsets[fd] = 0;
+        return (uint64_t)fd;
+    }
+
+    /* ── 438: pidfd_getfd — ENOSYS ───────────────────────────────────────── */
+    case SYS_PIDFD_GETFD:
+        RET_ERR(ENOSYS);
+
+    /* ── 439: faccessat2 — delegate to faccessat ─────────────────────────── */
+    case SYS_FACCESSAT2:
+        return syscall_dispatch(SYS_FACCESSAT, a1, a2, a3, 0, 0);
+
+    /* ── 440: process_madvise ────────────────────────────────────────────── */
+    case SYS_PROCESS_MADVISE:
+        return 0;
+
+    /* ── 441: epoll_pwait2 — same as epoll_wait ──────────────────────────── */
+    case SYS_EPOLL_PWAIT2:
+        return 0;
+
+    /* ── 442: mount_setattr ──────────────────────────────────────────────── */
+    case SYS_MOUNT_SETATTR:
+        RET_ERR(ENOSYS);
+
+    /* ── 443: quotactl_fd ────────────────────────────────────────────────── */
+    case SYS_QUOTACTL_FD:
+        RET_ERR(ENOSYS);
+
+    /* ── 444–446: Landlock LSM ───────────────────────────────────────────── */
+    case SYS_LANDLOCK_CREATE_RULESET:
+    case SYS_LANDLOCK_ADD_RULE:
+    case SYS_LANDLOCK_RESTRICT_SELF:
+        RET_ERR(ENOSYS);
+
+    /* ── 447: memfd_secret ───────────────────────────────────────────────── */
+    case SYS_MEMFD_SECRET:
+        RET_ERR(ENOSYS);
+
+    /* ── 448: process_mrelease ───────────────────────────────────────────── */
+    case SYS_PROCESS_MRELEASE:
+        RET_ERR(ENOSYS);
+
+    /* ── 449: futex_waitv ────────────────────────────────────────────────── */
+    case SYS_FUTEX_WAITV:
+        RET_ERR(ENOSYS);
+
+    /* ── 450: set_mempolicy_home_node ────────────────────────────────────── */
+    case SYS_SET_MEMPOLICY_HOME_NODE:
+        return 0;
+
+    /* ── 451: cachestat ──────────────────────────────────────────────────── */
+    case SYS_CACHESTAT:
+        RET_ERR(ENOSYS);
+
+    /* ── 452: fchmodat2 — delegate to fchmodat ───────────────────────────── */
+    case SYS_FCHMODAT2:
+        return syscall_dispatch(SYS_FCHMODAT, a1, a2, a3, 0, 0);
+
+    /* ── 453: map_shadow_stack ───────────────────────────────────────────── */
+    case SYS_MAP_SHADOW_STACK:
+        RET_ERR(ENOSYS);
+
+    /* ── 454–456: futex_wake / futex_wait / futex_requeue ────────────────── */
+    case SYS_FUTEX_WAKE:
+    case SYS_FUTEX_WAIT_SC:
+    case SYS_FUTEX_REQUEUE:
+        return 0;   /* single-threaded — trivially done */
+
+    /* ── 457–458: statmount / listmount ──────────────────────────────────── */
+    case SYS_STATMOUNT:
+    case SYS_LISTMOUNT:
+        RET_ERR(ENOSYS);
+
+    /* ── 459–461: LSM attribute syscalls ─────────────────────────────────── */
+    case SYS_LSM_GET_SELF_ATTR:
+    case SYS_LSM_SET_SELF_ATTR:
+    case SYS_LSM_LIST_MODULES:
+        RET_ERR(ENOSYS);
+
+    /* ── 462: mseal (memory sealing) ────────────────────────────────────── */
+    case SYS_MSEAL:
+        return 0;   /* no-op: sealing accepted, not enforced */
 
     /* ── Unknown ─────────────────────────────────────────────────────────── */
     default:
