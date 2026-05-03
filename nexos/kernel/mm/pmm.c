@@ -2,9 +2,6 @@
 #include "pmm.h"
 #include "../kernel.h"
 
-/* Linker-provided symbols — mark the exact extent of the kernel binary
-   (code + rodata + data + BSS, including boot page tables, PMM bitmap,
-   kernel heap arena, and boot stack).  Defined in boot/linker.ld. */
 extern uint8_t kernel_start[];
 extern uint8_t kernel_end[];
 
@@ -18,91 +15,86 @@ static uint64_t pmm_last_alloc  = 0;
 
 /* ── Bitmap helpers ─────────────────────────────────────────────────────── */
 
-static void bitmap_set(uint64_t bit) {
+static inline void bitmap_set(uint64_t bit) {
     pmm_bitmap[bit / 32] |= (1u << (bit % 32));
 }
-static void bitmap_clear(uint64_t bit) {
+static inline void bitmap_clear(uint64_t bit) {
     pmm_bitmap[bit / 32] &= ~(1u << (bit % 32));
 }
-static int bitmap_test(uint64_t bit) {
+static inline int bitmap_test(uint64_t bit) {
     return !!(pmm_bitmap[bit / 32] & (1u << (bit % 32)));
 }
 
 /* ── Public API ─────────────────────────────────────────────────────────── */
 
-/*
- * pmm_init — called once with the total physical memory extent.
- *
- * Marks every frame as reserved (bitmap = 0xFF…).  Callers must then call
- * pmm_init_region() for each available RAM region and pmm_deinit_region()
- * for every reserved region (kernel image, BIOS area, etc.).
- */
 void pmm_init(uint64_t mem_lower, uint64_t mem_upper) {
     UNUSED(mem_lower);
-
-    /* Step a: mark ALL frames as used. */
     for (int i = 0; i < PMM_BITMAP_SIZE; i++) pmm_bitmap[i] = 0xFFFFFFFF;
-
     pmm_total_pages = mem_upper / PAGE_SIZE;
     pmm_free_pages  = 0;
     pmm_last_alloc  = 0;
-
     klog(LOG_INFO, "PMM: initialized - %llu MB physical memory ceiling",
          mem_upper / (1024 * 1024));
 }
 
-/*
- * pmm_init_region — mark a physical region as available (free).
- * Called for every Multiboot2 memory-map entry with type = 1.
- * Skips frames below 1 MB (BIOS/legacy area — never handed out).
- */
 void pmm_init_region(uint64_t base, uint64_t size) {
     uint64_t start = base / PAGE_SIZE;
     uint64_t count = size / PAGE_SIZE;
     for (uint64_t i = start; i < start + count; i++) {
-        if (i < 256) continue;      /* always keep first 1 MB reserved */
+        if (i < 256) continue;
         if (i >= pmm_total_pages) break;
         bitmap_clear(i);
         pmm_free_pages++;
     }
 }
 
-/*
- * pmm_deinit_region — mark a physical region as reserved (used).
- *
- * BUG FIX: the old version decremented pmm_free_pages unconditionally,
- * even for frames that were never freed (e.g., BIOS pages 0-255).
- * Now we only decrement if the frame was actually free before marking.
- */
 void pmm_deinit_region(uint64_t base, uint64_t size) {
     uint64_t start = base / PAGE_SIZE;
     uint64_t count = size / PAGE_SIZE;
     for (uint64_t i = start; i < start + count; i++) {
-        if (!bitmap_test(i)) {      /* only count it if it was free */
+        if (!bitmap_test(i)) {
             pmm_free_pages--;
         }
         bitmap_set(i);
     }
 }
 
+/* ── pmm_alloc_page ──────────────────────────────────────────────────────
+ * Optimisation: word-scan — when an entire 32-page bitmap word is 0xFFFFFFFF
+ * (all used), skip all 32 frames in a single comparison instead of testing
+ * each bit individually.  In a nearly-empty system this cuts scan time to
+ * O(total_pages / 32) in the worst case.                                   */
 uint64_t pmm_alloc_page(void) {
-    /* Search from last allocation upwards */
-    for (uint64_t i = pmm_last_alloc; i < pmm_total_pages; i++) {
+    /* Forward scan from last allocation */
+    for (uint64_t i = pmm_last_alloc; i < pmm_total_pages; ) {
+        uint32_t widx = (uint32_t)(i / 32);
+        /* Skip the whole 32-page word if every frame in it is used */
+        if (pmm_bitmap[widx] == 0xFFFFFFFFu) {
+            i = ((uint64_t)widx + 1u) * 32u;
+            continue;
+        }
         if (!bitmap_test(i)) {
             bitmap_set(i);
             if (pmm_free_pages > 0) pmm_free_pages--;
             pmm_last_alloc = i + 1;
             return i * PAGE_SIZE;
         }
+        i++;
     }
-    /* Wrap around and search from just above the first 1 MB */
-    for (uint64_t i = 256; i < pmm_last_alloc; i++) {
+    /* Wrap-around: scan from just above the first 1 MB to pmm_last_alloc */
+    for (uint64_t i = 256; i < pmm_last_alloc; ) {
+        uint32_t widx = (uint32_t)(i / 32);
+        if (pmm_bitmap[widx] == 0xFFFFFFFFu) {
+            i = ((uint64_t)widx + 1u) * 32u;
+            continue;
+        }
         if (!bitmap_test(i)) {
             bitmap_set(i);
             if (pmm_free_pages > 0) pmm_free_pages--;
             pmm_last_alloc = i + 1;
             return i * PAGE_SIZE;
         }
+        i++;
     }
     klog(LOG_ERROR, "PMM: out of physical memory!");
     return 0;

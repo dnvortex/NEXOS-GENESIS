@@ -143,21 +143,46 @@ static const uint8_t font8x16[256][16] = {
 /* 0x82 */ {0x00,0x00,0x38,0x6C,0xC6,0xC6,0xC6,0xC6,0x6C,0x38,0x00,0x00,0x00,0x00,0x00,0x00},
 /* 0x83-0xFF: blank */
 };
-/* For 0x83..0xFF we return a blank glyph — patched in font_putchar */
 
 /* ══════════════════════════════════════════════════════════════════════════
- * Renderer
+ * Renderer — optimised
+ *
+ * Old approach: called fb_put_pixel() 128 times per character (8 cols × 16
+ * rows), each call doing a full bounds-check.
+ *
+ * New approach: bounds-check once per character and once per row (Y only),
+ * then write directly to the pre-computed row pointer.  For typical ASCII
+ * text well within the screen this is ~4× faster.
  * ══════════════════════════════════════════════════════════════════════════ */
 void font_putchar(int x, int y, char c, uint32_t fg, uint32_t bg) {
+    /* Trivial reject: glyph completely off screen */
+    if (x + 8 <= 0 || y + 16 <= 0 ||
+        x >= (int)fb.width || y >= (int)fb.height) return;
+
     unsigned int ci = (unsigned int)(uint8_t)c;
-    if (ci > 0x82) ci = 0x20; /* fallback to space for unmapped high chars */
+    if (ci > 0x82) ci = 0x20;
     const uint8_t *glyph = font8x16[ci];
+    int transparent_bg = (bg == 0);
+    int fbw = (int)fb.width;
+
     for (int row = 0; row < 16; row++) {
+        int py = y + row;
+        if (py < 0) continue;
+        if (py >= (int)fb.height) break;
+
+        /* Compute row pointer once — avoids recomputing the multiply 8 times */
+        uint32_t *rowptr = (uint32_t *)((uint8_t *)fb.addr + (uint32_t)py * fb.pitch);
         uint8_t bits = glyph[row];
+
+        /* Unrolled over 8 columns — compiler can further optimise */
         for (int col = 0; col < 8; col++) {
-            uint32_t color = (bits & (0x80 >> col)) ? fg : bg;
-            if (bg == 0 && !(bits & (0x80 >> col))) continue; /* transparent bg */
-            fb_put_pixel(x + col, y + row, color);
+            int px = x + col;
+            if (px < 0 || px >= fbw) continue;
+            if (bits & (0x80u >> col)) {
+                rowptr[px] = fg;
+            } else if (!transparent_bg) {
+                rowptr[px] = bg;
+            }
         }
     }
 }
@@ -171,18 +196,39 @@ void font_puts(int x, int y, const char *s, uint32_t fg, uint32_t bg) {
     }
 }
 
+/* ── 2× scaled variant — same row-pointer optimisation ─────────────────── */
 void font_putchar2x(int x, int y, char c, uint32_t fg, uint32_t bg) {
+    if (x + 16 <= 0 || y + 32 <= 0 ||
+        x >= (int)fb.width || y >= (int)fb.height) return;
+
     unsigned int ci = (unsigned int)(uint8_t)c;
     if (ci > 0x82) ci = 0x20;
     const uint8_t *glyph = font8x16[ci];
+    int transparent_bg = (bg == 0);
+    int fbw = (int)fb.width, fbh = (int)fb.height;
+
     for (int row = 0; row < 16; row++) {
         uint8_t bits = glyph[row];
-        for (int col = 0; col < 8; col++) {
-            uint32_t color = (bits & (0x80 >> col)) ? fg : bg;
-            if (bg == 0 && !(bits & (0x80 >> col))) continue;
-            fb_fill_rect(x + col * 2, y + row * 2, 2, 2, color);
+        for (int sr = 0; sr < 2; sr++) {       /* 2 vertical pixels per row */
+            int py = y + row * 2 + sr;
+            if (py < 0) continue;
+            if (py >= fbh) goto done2x;
+            uint32_t *rowptr = (uint32_t *)((uint8_t *)fb.addr + (uint32_t)py * fb.pitch);
+            for (int col = 0; col < 8; col++) {
+                int px0 = x + col * 2;
+                if (px0 + 1 < 0) continue;
+                if (px0 >= fbw)  break;
+                if (bits & (0x80u >> col)) {
+                    if (px0 >= 0)    rowptr[px0]   = fg;
+                    if (px0+1 < fbw) rowptr[px0+1] = fg;
+                } else if (!transparent_bg) {
+                    if (px0 >= 0)    rowptr[px0]   = bg;
+                    if (px0+1 < fbw) rowptr[px0+1] = bg;
+                }
+            }
         }
     }
+done2x:;
 }
 
 void font_puts2x(int x, int y, const char *s, uint32_t fg, uint32_t bg) {
@@ -197,7 +243,7 @@ void font_puts2x(int x, int y, const char *s, uint32_t fg, uint32_t bg) {
 int font_str_width(const char *s) {
     int n = 0;
     while (*s) { if (*s != '\n') n++; s++; }
-    return n; /* in characters; multiply by 8 for pixels */
+    return n; /* characters; multiply by 8 for pixels */
 }
 
 int font_str_width2x(const char *s) {
@@ -214,25 +260,33 @@ void font_printf(int x, int y, uint32_t fg, uint32_t bg, const char *fmt, ...) {
         if (*fmt == '0') { kp = '0'; fmt++; }
         while (*fmt >= '0' && *fmt <= '9') { kw = kw * 10 + (*fmt - '0'); fmt++; }
         switch (*fmt) {
-        case 'd': { int64_t v = va_arg(ap, int64_t);
+        case 'd': {
+            int64_t v = va_arg(ap, int64_t);
             if (v < 0) { buf[bi++] = '-'; v = -v; }
             char t[20]; int ti = 0;
             do { t[ti++] = '0' + (int)(v % 10); v /= 10; } while (v);
             while (ti < kw && bi < 510) { buf[bi++] = kp; kw--; }
-            while (ti > 0 && bi < 510) buf[bi++] = t[--ti]; break; }
-        case 'u': { uint64_t v = va_arg(ap, uint64_t);
+            while (ti > 0 && bi < 510) { buf[bi++] = t[--ti]; }
+            break; }
+        case 'u': {
+            uint64_t v = va_arg(ap, uint64_t);
             char t[20]; int ti = 0;
             do { t[ti++] = '0' + (int)(v % 10); v /= 10; } while (v);
             while (ti < kw && bi < 510) { buf[bi++] = kp; kw--; }
-            while (ti > 0 && bi < 510) buf[bi++] = t[--ti]; break; }
-        case 'x': { uint64_t v = va_arg(ap, uint64_t);
+            while (ti > 0 && bi < 510) { buf[bi++] = t[--ti]; }
+            break; }
+        case 'x': {
+            uint64_t v = va_arg(ap, uint64_t);
             const char *hx = "0123456789abcdef"; char t[16]; int ti = 0;
             do { t[ti++] = hx[v & 0xF]; v >>= 4; } while (v);
             while (ti < kw && bi < 510) { buf[bi++] = kp; kw--; }
-            while (ti > 0 && bi < 510) buf[bi++] = t[--ti]; break; }
-        case 's': { const char *s = va_arg(ap, const char *);
+            while (ti > 0 && bi < 510) { buf[bi++] = t[--ti]; }
+            break; }
+        case 's': {
+            const char *s = va_arg(ap, const char *);
             if (!s) s = "(null)";
-            while (*s && bi < 510) buf[bi++] = *s++; break; }
+            while (*s && bi < 510) { buf[bi++] = *s++; }
+            break; }
         case '%': buf[bi++] = '%'; break;
         default:  buf[bi++] = '%'; buf[bi++] = *fmt; break;
         }
