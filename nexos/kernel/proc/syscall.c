@@ -22,15 +22,21 @@
 /* ── Linux errno values ──────────────────────────────────────────────────── */
 #define EPERM    1
 #define ENOENT   2
+#define ESRCH    3
 #define EINTR    4
-#define EBADF    9
-#define ECHILD   10
-#define ENOMEM   12
-#define EFAULT   14
+#define EIO      5
+#define EEXIST   17
 #define ENOTDIR  20
 #define EINVAL   22
 #define ENFILE   23
+#define EMFILE   24
 #define ENOTTY   25
+#define EBADF    9
+#define ECHILD   10
+#define EAGAIN   11
+#define ENOMEM   12
+#define EFAULT   14
+#define ENOTCONN 107
 #define ERANGE   34
 #define ENOSYS   38
 
@@ -117,6 +123,34 @@ static void sc_strcpy(char *d, const char *s, size_t max) {
 }
 static size_t sc_strlen(const char *s) {
     size_t n = 0; while (s[n]) n++; return n;
+}
+
+/* ── at_resolve: resolve (dirfd, path) → absolute path ──────────────────── *
+ * Handles AT_FDCWD (-100) and absolute paths.  For relative paths with a    *
+ * real dirfd we fall back to CWD (VFS nodes do not store full paths).       */
+#define AT_FDCWD_VALUE (-100)
+static int at_resolve(process_t *proc, int dirfd, const char *path,
+                      char *out, size_t outsz) {
+    if (!path) return -1;
+    /* Absolute path: ignore dirfd entirely */
+    if (path[0] == '/') { sc_strcpy(out, path, outsz); return 0; }
+    /* Pick base directory string */
+    const char *base;
+    if (dirfd == AT_FDCWD_VALUE) {
+        base = (proc && proc->cwd[0]) ? proc->cwd : "/";
+    } else if (proc && dirfd >= 0 && dirfd < MAX_FDS && proc->fds[dirfd]) {
+        base = (proc->cwd[0]) ? proc->cwd : "/"; /* node has no stored path */
+    } else {
+        return -1;
+    }
+    /* Join: base + "/" + path */
+    size_t blen = sc_strlen(base);
+    size_t plen = sc_strlen(path);
+    if (blen + 1 + plen + 1 > outsz) return -1;
+    for (size_t i = 0; i < blen; i++) out[i] = base[i];
+    if (blen > 0 && out[blen - 1] != '/') { out[blen] = '/'; blen++; }
+    for (size_t i = 0; i <= plen; i++) out[blen + i] = path[i];
+    return 0;
 }
 
 /* Map VFS node type to Linux st_mode file-type bits */
@@ -237,7 +271,6 @@ static int map_anon_pages(uint64_t virt, uint64_t len) {
 /* ── Main dispatcher ─────────────────────────────────────────────────────── */
 uint64_t syscall_dispatch(uint64_t num, uint64_t a1, uint64_t a2, uint64_t a3,
                            uint64_t a4, uint64_t a5) {
-    UNUSED(a5);
     process_t *proc = proc_get_current();
 
     switch ((int)num) {
@@ -1193,6 +1226,746 @@ uint64_t syscall_dispatch(uint64_t num, uint64_t a1, uint64_t a2, uint64_t a3,
     /* ── 273: set_robust_list ───────────────────────────────────────────── */
     case SYS_SET_ROBUST_LIST:
         return 0;
+
+    /* ═══════════════════════════════════════════════════════════════════════
+     *  LEVEL 1 / LEVEL 2 LINUX ABI  — ~110 additional syscalls
+     * ═══════════════════════════════════════════════════════════════════════ */
+
+    /* ── 6: lstat (no real symlinks, same as stat) ───────────────────────── */
+    case SYS_LSTAT: {
+        const char   *path = (const char *)(uintptr_t)a1;
+        linux_stat_t *ls   = (linux_stat_t *)(uintptr_t)a2;
+        if (!path || !ls) RET_ERR(EFAULT);
+        vfs_stat_t vs;
+        if (vfs_stat(path, &vs) != 0) RET_ERR(ENOENT);
+        fill_stat_from_vstat(ls, &vs);
+        return 0;
+    }
+
+    /* ── 7: poll ─────────────────────────────────────────────────────────── */
+    case SYS_POLL: {
+        typedef struct { int fd; short events; short revents; } pollfd_t;
+        pollfd_t *pfds = (pollfd_t *)(uintptr_t)a1;
+        int nfds = (int)a2;
+        /* int timeout = (int)a3; */
+        if (!pfds || nfds <= 0) return 0;
+        int ready = 0;
+        for (int i = 0; i < nfds; i++) {
+            pfds[i].revents = 0;
+            if (proc && pfds[i].fd >= 0 && pfds[i].fd < MAX_FDS
+                && proc->fds[pfds[i].fd]) {
+                if (pfds[i].events & 0x01) { pfds[i].revents |= 0x01; ready++; }
+                if (pfds[i].events & 0x04) { pfds[i].revents |= 0x04; ready++; }
+            }
+        }
+        return ready;
+    }
+
+    /* ── 25: mremap — alloc new region, copy ────────────────────────────── */
+    case SYS_MREMAP: {
+        uint64_t old_addr = a1;
+        uint64_t old_size = a2;
+        uint64_t new_size = a3;
+        if (!proc) RET_ERR(ENOMEM);
+        new_size = (new_size + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
+        uint64_t new_addr = proc_get_mmap_base(proc);
+        if (map_anon_pages(new_addr, new_size) != 0) RET_ERR(ENOMEM);
+        proc->mmap_base = new_addr + new_size;
+        uint64_t copy = (old_size < new_size) ? old_size : new_size;
+        uint8_t *src = (uint8_t *)(uintptr_t)old_addr;
+        uint8_t *dst = (uint8_t *)(uintptr_t)new_addr;
+        for (uint64_t i = 0; i < copy; i++) dst[i] = src[i];
+        return new_addr;
+    }
+
+    /* ── 26: msync — no-op ───────────────────────────────────────────────── */
+    case SYS_MSYNC:
+        return 0;
+
+    /* ── 27: mincore — all pages resident ───────────────────────────────── */
+    case SYS_MINCORE: {
+        uint64_t len = a2;
+        uint8_t *vec = (uint8_t *)(uintptr_t)a3;
+        if (!vec) RET_ERR(EFAULT);
+        uint64_t npages = (len + PAGE_SIZE - 1) / PAGE_SIZE;
+        for (uint64_t i = 0; i < npages; i++) vec[i] = 1;
+        return 0;
+    }
+
+    /* ── 29-31: SysV shm — ENOSYS ────────────────────────────────────────── */
+    case SYS_SHMGET: case SYS_SHMAT: case SYS_SHMCTL:
+        RET_ERR(ENOSYS);
+
+    /* ── 34: pause — instant fake-EINTR ─────────────────────────────────── */
+    case SYS_PAUSE:
+        RET_ERR(EINTR);
+
+    /* ── 37: alarm — no SIGALRM delivery, return 0 ──────────────────────── */
+    case SYS_ALARM:
+        return 0;
+
+    /* ── 38: setitimer — stub ────────────────────────────────────────────── */
+    case SYS_SETITIMER:
+        return 0;
+
+    /* ── 46-47: sendmsg / recvmsg — ENOSYS ──────────────────────────────── */
+    case SYS_SENDMSG: case SYS_RECVMSG:
+        RET_ERR(ENOSYS);
+
+    /* ── 48: shutdown ────────────────────────────────────────────────────── */
+    case SYS_SHUTDOWN:
+        return 0;
+
+    /* ── 51-52: getsockname / getpeername ───────────────────────────────── */
+    case SYS_GETSOCKNAME: case SYS_GETPEERNAME:
+        RET_ERR(ENOTCONN);
+
+    /* ── 53: socketpair ──────────────────────────────────────────────────── */
+    case SYS_SOCKETPAIR:
+        RET_ERR(ENOSYS);
+
+    /* ── 54-55: setsockopt / getsockopt — accept silently ───────────────── */
+    case SYS_SETSOCKOPT: case SYS_GETSOCKOPT:
+        return 0;
+
+    /* ── 58: vfork — ENOSYS (no real fork yet) ───────────────────────────── */
+    case SYS_VFORK:
+        RET_ERR(ENOSYS);
+
+    /* ── 64-71: SysV IPC — ENOSYS ────────────────────────────────────────── */
+    case SYS_SEMGET: case SYS_SEMOP:  case SYS_SEMCTL:
+    case SYS_SHMDT:
+    case SYS_MSGGET: case SYS_MSGSND: case SYS_MSGRCV: case SYS_MSGCTL:
+        RET_ERR(ENOSYS);
+
+    /* ── 73: flock — no-op (single process) ─────────────────────────────── */
+    case SYS_FLOCK:
+        return 0;
+
+    /* ── 74: fsync / 75: fdatasync — no-op ──────────────────────────────── */
+    case SYS_FSYNC: case SYS_FDATASYNC: {
+        int fd = (int)a1;
+        if (!proc || fd < 0 || fd >= MAX_FDS || !proc->fds[fd]) RET_ERR(EBADF);
+        return 0;
+    }
+
+    /* ── 76: truncate ────────────────────────────────────────────────────── */
+    case SYS_TRUNCATE: {
+        const char *path = (const char *)(uintptr_t)a1;
+        int64_t     len  = (int64_t)a2;
+        if (!path) RET_ERR(EFAULT);
+        vfs_node_t *node = vfs_open(path, 0);
+        if (!node) RET_ERR(ENOENT);
+        node->size = (len > 0) ? (uint64_t)len : 0;
+        vfs_close(node);
+        return 0;
+    }
+
+    /* ── 81: fchdir ──────────────────────────────────────────────────────── */
+    case SYS_FCHDIR: {
+        int fd = (int)a1;
+        if (!proc || fd < 0 || fd >= MAX_FDS || !proc->fds[fd]) RET_ERR(EBADF);
+        vfs_node_t *node = proc->fds[fd];
+        if (!(node->type & VFS_NODE_DIR)) RET_ERR(ENOTDIR);
+        if (node->name[0]) sc_strcpy(proc->cwd, node->name, sizeof(proc->cwd));
+        return 0;
+    }
+
+    /* ── 85: creat(path,mode) = open(O_CREAT|O_WRONLY|O_TRUNC) ──────────── */
+    case SYS_CREAT: {
+        const char *path = (const char *)(uintptr_t)a1;
+        if (!path || !proc) RET_ERR(EFAULT);
+        vfs_node_t *node = vfs_open(path, 0x241);
+        if (!node) {
+            vfs_create(path, 0);
+            node = vfs_open(path, 0x241);
+        }
+        if (!node) RET_ERR(ENOENT);
+        int fd = proc_open_fd(proc, node);
+        if (fd < 0) { vfs_close(node); RET_ERR(ENFILE); }
+        proc->fd_offsets[fd] = 0;
+        return (uint64_t)fd;
+    }
+
+    /* ── 86: link — no hard links ────────────────────────────────────────── */
+    case SYS_LINK:
+        RET_ERR(EPERM);
+
+    /* ── 88: symlink — no symlinks in VFS ───────────────────────────────── */
+    case SYS_SYMLINK:
+        RET_ERR(EPERM);
+
+    /* ── 91: fchmod — no permission model ───────────────────────────────── */
+    case SYS_FCHMOD:
+        return 0;
+
+    /* ── 93: fchown / 94: lchown — we're always root ────────────────────── */
+    case SYS_FCHOWN: case SYS_LCHOWN:
+        return 0;
+
+    /* ── 98: getrusage ───────────────────────────────────────────────────── */
+    case SYS_GETRUSAGE: {
+        uint64_t *ru = (uint64_t *)(uintptr_t)a2;
+        if (ru) { for (int i = 0; i < 18; i++) ru[i] = 0; }
+        return 0;
+    }
+
+    /* ── 100: times ──────────────────────────────────────────────────────── */
+    case SYS_TIMES: {
+        uint64_t *tms = (uint64_t *)(uintptr_t)a1;
+        if (tms) { tms[0] = tms[1] = tms[2] = tms[3] = 0; }
+        return 0;
+    }
+
+    /* ── 101: ptrace — deny ───────────────────────────────────────────────── */
+    case SYS_PTRACE:
+        RET_ERR(EPERM);
+
+    /* ── 103: syslog — no-op ──────────────────────────────────────────────── */
+    case SYS_SYSLOG:
+        return 0;
+
+    /* ── UID/GID setters — we're always UID 0, accept silently ─────────── */
+    case SYS_SETUID:    case SYS_SETGID:
+    case SYS_SETREUID:  case SYS_SETREGID:
+    case SYS_SETGROUPS:
+    case SYS_SETRESUID: case SYS_SETRESGID:
+    case SYS_SETFSUID:  case SYS_SETFSGID:
+        return 0;
+
+    /* ── 109: setpgid ────────────────────────────────────────────────────── */
+    case SYS_SETPGID:
+        return 0;
+
+    /* ── 111: getpgrp ────────────────────────────────────────────────────── */
+    case SYS_GETPGRP:
+        return proc ? (uint64_t)proc->pid : 1;
+
+    /* ── 118: getresuid ──────────────────────────────────────────────────── */
+    case SYS_GETRESUID: {
+        uint32_t *r = (uint32_t *)(uintptr_t)a1;
+        uint32_t *e = (uint32_t *)(uintptr_t)a2;
+        uint32_t *s = (uint32_t *)(uintptr_t)a3;
+        if (r) *r = 0; if (e) *e = 0; if (s) *s = 0;
+        return 0;
+    }
+
+    /* ── 120: getresgid ──────────────────────────────────────────────────── */
+    case SYS_GETRESGID: {
+        uint32_t *r = (uint32_t *)(uintptr_t)a1;
+        uint32_t *e = (uint32_t *)(uintptr_t)a2;
+        uint32_t *s = (uint32_t *)(uintptr_t)a3;
+        if (r) *r = 0; if (e) *e = 0; if (s) *s = 0;
+        return 0;
+    }
+
+    /* ── 121: getpgid ────────────────────────────────────────────────────── */
+    case SYS_GETPGID:
+        return proc ? (uint64_t)proc->pid : 1;
+
+    /* ── 124: getsid ─────────────────────────────────────────────────────── */
+    case SYS_GETSID:
+        return proc ? (uint64_t)proc->pid : 1;
+
+    /* ── 125: capget — full root caps ────────────────────────────────────── */
+    case SYS_CAPGET: {
+        uint32_t *d = (uint32_t *)(uintptr_t)a2;
+        if (d) {
+            for (int i = 0; i < 6; i++) d[i] = 0xFFFFFFFFu;
+        }
+        return 0;
+    }
+
+    /* ── 126: capset — accept ────────────────────────────────────────────── */
+    case SYS_CAPSET:
+        return 0;
+
+    /* ── 127-130: more signal syscalls ───────────────────────────────────── */
+    case SYS_RT_SIGPENDING:
+        if (a1) *(uint64_t *)(uintptr_t)a1 = 0;
+        return 0;
+    case SYS_RT_SIGTIMEDWAIT:
+        RET_ERR(EINTR);
+    case SYS_RT_SIGQUEUEINFO:
+        return 0;
+    case SYS_RT_SIGSUSPEND:
+        RET_ERR(EINTR);
+
+    /* ── 132: utime — accept silently ────────────────────────────────────── */
+    case SYS_UTIME:
+        return 0;
+
+    /* ── 133: mknod ──────────────────────────────────────────────────────── */
+    case SYS_MKNOD: {
+        const char *path = (const char *)(uintptr_t)a1;
+        if (!path) RET_ERR(EFAULT);
+        vfs_create(path, 0);
+        return 0;
+    }
+
+    /* ── 135: personality — PER_LINUX ───────────────────────────────────── */
+    case SYS_PERSONALITY:
+        return 0;
+
+    /* ── 137: statfs ─────────────────────────────────────────────────────── */
+    case SYS_STATFS: {
+        /* struct statfs layout: f_type, f_bsize, f_blocks, f_bfree,
+           f_bavail, f_files, f_ffree, f_fsid(2×u64), f_namelen ... */
+        uint64_t *sf = (uint64_t *)(uintptr_t)a2;
+        if (!sf) RET_ERR(EFAULT);
+        for (int i = 0; i < 15; i++) sf[i] = 0;
+        sf[0] = 0xEF53;        /* EXT2_SUPER_MAGIC   */
+        sf[1] = 4096;          /* f_bsize             */
+        sf[2] = 1024*1024;     /* f_blocks (4 GB)     */
+        sf[3] = 512*1024;      /* f_bfree             */
+        sf[4] = 512*1024;      /* f_bavail            */
+        sf[5] = 65536;         /* f_files             */
+        sf[6] = 32768;         /* f_ffree             */
+        sf[8] = 255;           /* f_namelen (at [8] after 2×u64 fsid) */
+        return 0;
+    }
+
+    /* ── 138: fstatfs ────────────────────────────────────────────────────── */
+    case SYS_FSTATFS: {
+        uint64_t *sf = (uint64_t *)(uintptr_t)a2;
+        if (!sf) RET_ERR(EFAULT);
+        for (int i = 0; i < 15; i++) sf[i] = 0;
+        sf[0] = 0xEF53; sf[1] = 4096; sf[2] = 1024*1024;
+        sf[3] = 512*1024; sf[4] = 512*1024;
+        sf[5] = 65536;   sf[6] = 32768; sf[8] = 255;
+        return 0;
+    }
+
+    /* ── 140-141: getpriority / setpriority ──────────────────────────────── */
+    case SYS_GETPRIORITY: return 0;
+    case SYS_SETPRIORITY: return 0;
+
+    /* ── 142-148: POSIX scheduler calls — all succeed ───────────────────── */
+    case SYS_SCHED_SETPARAM:   case SYS_SCHED_GETPARAM:
+    case SYS_SCHED_SETSCHEDULER: case SYS_SCHED_GETSCHEDULER:
+        return 0;
+    case SYS_SCHED_GET_PRIORITY_MAX: return 99;
+    case SYS_SCHED_GET_PRIORITY_MIN: return 1;
+    case SYS_SCHED_RR_GET_INTERVAL: {
+        linux_timespec_t *ts = (linux_timespec_t *)(uintptr_t)a2;
+        if (ts) { ts->tv_sec = 0; ts->tv_nsec = 10000000LL; }
+        return 0;
+    }
+
+    /* ── 149-152: mlock family — no-op ───────────────────────────────────── */
+    case SYS_MLOCK: case SYS_MUNLOCK:
+    case SYS_MLOCKALL: case SYS_MUNLOCKALL:
+        return 0;
+
+    /* ── 160: setrlimit — accept ─────────────────────────────────────────── */
+    case SYS_SETRLIMIT:
+        return 0;
+
+    /* ── 161: chroot ─────────────────────────────────────────────────────── */
+    case SYS_CHROOT: {
+        const char *path = (const char *)(uintptr_t)a1;
+        if (!path) RET_ERR(EFAULT);
+        if (proc) sc_strcpy(proc->cwd, path, sizeof(proc->cwd));
+        return 0;
+    }
+
+    /* ── 162: sync / 163: acct — no-op ──────────────────────────────────── */
+    case SYS_SYNC: case SYS_ACCT:
+        return 0;
+
+    /* ── 169: reboot ─────────────────────────────────────────────────────── */
+    case SYS_REBOOT: {
+        /* QEMU ACPI shutdown via port 0x604, else keyboard controller reset */
+        __asm__ volatile("outw %0, %1" :: "a"((uint16_t)0x2000), "Nd"((uint16_t)0x604));
+        __asm__ volatile("outb %0, %1" :: "a"((uint8_t)0xFE),    "Nd"((uint8_t)0x64));
+        return 0;
+    }
+
+    /* ── 170: sethostname — accept ───────────────────────────────────────── */
+    case SYS_SETHOSTNAME:
+        return 0;
+
+    /* ── 186: gettid — return PID (single-threaded) ─────────────────────── */
+    case SYS_GETTID:
+        return proc ? (uint64_t)proc->pid : 1;
+
+    /* ── 200: tkill ──────────────────────────────────────────────────────── */
+    case SYS_TKILL: {
+        int tid = (int)a1;
+        int sig = (int)a2;
+        if (sig == 9 || sig == 15) proc_kill((uint32_t)tid);
+        return 0;
+    }
+
+    /* ── 201: time(t) ────────────────────────────────────────────────────── */
+    case SYS_TIME: {
+        /* Approximate: ticks since boot / 1000 = seconds since boot */
+        uint64_t t = timer_get_ticks() / 1000;
+        if (a1) *(uint64_t *)(uintptr_t)a1 = t;
+        return t;
+    }
+
+    /* ── 203-204: sched affinity — single CPU ────────────────────────────── */
+    case SYS_SCHED_SETAFFINITY:
+        return 0;
+    case SYS_SCHED_GETAFFINITY: {
+        uint64_t *mask = (uint64_t *)(uintptr_t)a3;
+        if (mask) *mask = 1;
+        return 0;
+    }
+
+    /* ── 213 / 291: epoll_create / epoll_create1 — dummy fd ─────────────── */
+    case SYS_EPOLL_CREATE: case SYS_EPOLL_CREATE1: {
+        if (!proc) RET_ERR(ENOMEM);
+        vfs_node_t *node = vfs_open("/dev/null", 0);
+        if (!node) RET_ERR(ENOMEM);
+        int fd = proc_open_fd(proc, node);
+        if (fd < 0) { vfs_close(node); RET_ERR(EMFILE); }
+        return (uint64_t)fd;
+    }
+
+    /* ── 229: clock_getres — 1 ms resolution ────────────────────────────── */
+    case SYS_CLOCK_GETRES: {
+        linux_timespec_t *ts = (linux_timespec_t *)(uintptr_t)a2;
+        if (ts) { ts->tv_sec = 0; ts->tv_nsec = 1000000LL; }
+        return 0;
+    }
+
+    /* ── 230: clock_nanosleep ────────────────────────────────────────────── */
+    case SYS_CLOCK_NANOSLEEP: {
+        linux_timespec_t *rqtp = (linux_timespec_t *)(uintptr_t)a3;
+        if (rqtp) {
+            uint64_t ms = (uint64_t)rqtp->tv_sec * 1000
+                        + (uint64_t)rqtp->tv_nsec / 1000000ULL;
+            if (ms > 0) timer_sleep_ms((uint32_t)ms);
+        }
+        return 0;
+    }
+
+    /* ── 232: epoll_wait — no events ────────────────────────────────────── */
+    case SYS_EPOLL_WAIT:
+        return 0;
+
+    /* ── 233: epoll_ctl — accept ─────────────────────────────────────────── */
+    case SYS_EPOLL_CTL:
+        return 0;
+
+    /* ── 234: tgkill ─────────────────────────────────────────────────────── */
+    case SYS_TGKILL: {
+        int tid = (int)a2;
+        int sig = (int)a3;
+        if (sig == 9 || sig == 15) proc_kill((uint32_t)tid);
+        return 0;
+    }
+
+    /* ── 235: utimes — accept ────────────────────────────────────────────── */
+    case SYS_UTIMES:
+        return 0;
+
+    /* ── 257: openat ─────────────────────────────────────────────────────── */
+    case SYS_OPENAT: {
+        int         dirfd = (int)a1;
+        const char *path  = (const char *)(uintptr_t)a2;
+        int         flags = (int)a3;
+        if (!path || !proc) RET_ERR(EFAULT);
+        char rp[512];
+        if (at_resolve(proc, dirfd, path, rp, sizeof(rp)) < 0) RET_ERR(ENOENT);
+        vfs_node_t *node = vfs_open(rp, flags);
+        if (!node && (flags & 0x40)) {          /* O_CREAT */
+            vfs_create(rp, 0);
+            node = vfs_open(rp, flags);
+        }
+        if (!node) RET_ERR(ENOENT);
+        int fd = proc_open_fd(proc, node);
+        if (fd < 0) { vfs_close(node); RET_ERR(ENFILE); }
+        proc->fd_offsets[fd] = 0;
+        return (uint64_t)fd;
+    }
+
+    /* ── 258: mkdirat ────────────────────────────────────────────────────── */
+    case SYS_MKDIRAT: {
+        int         dirfd = (int)a1;
+        const char *path  = (const char *)(uintptr_t)a2;
+        if (!path) RET_ERR(EFAULT);
+        char rp[512];
+        if (at_resolve(proc, dirfd, path, rp, sizeof(rp)) < 0) RET_ERR(ENOENT);
+        return (vfs_mkdir(rp) == 0) ? 0 : (uint64_t)(-EEXIST);
+    }
+
+    /* ── 259: mknodat ────────────────────────────────────────────────────── */
+    case SYS_MKNODAT: {
+        int         dirfd = (int)a1;
+        const char *path  = (const char *)(uintptr_t)a2;
+        if (!path) RET_ERR(EFAULT);
+        char rp[512];
+        if (at_resolve(proc, dirfd, path, rp, sizeof(rp)) < 0) RET_ERR(ENOENT);
+        vfs_create(rp, 0);
+        return 0;
+    }
+
+    /* ── 260: fchownat — no-op ───────────────────────────────────────────── */
+    case SYS_FCHOWNAT:
+        return 0;
+
+    /* ── 262: newfstatat ─────────────────────────────────────────────────── */
+    case SYS_NEWFSTATAT: {
+        int           dirfd = (int)a1;
+        const char   *path  = (const char *)(uintptr_t)a2;
+        linux_stat_t *ls    = (linux_stat_t *)(uintptr_t)a3;
+        /* int flags = (int)a4; */
+        if (!ls) RET_ERR(EFAULT);
+        /* AT_EMPTY_PATH (0x1000): fstat on dirfd itself */
+        if (!path || path[0] == '\0') {
+            if (proc && dirfd >= 0 && dirfd < MAX_FDS && proc->fds[dirfd]) {
+                fill_stat_from_node(ls, proc->fds[dirfd]);
+                return 0;
+            }
+            RET_ERR(EBADF);
+        }
+        char rp[512];
+        if (at_resolve(proc, dirfd, path, rp, sizeof(rp)) < 0) RET_ERR(ENOENT);
+        vfs_stat_t vs;
+        if (vfs_stat(rp, &vs) != 0) RET_ERR(ENOENT);
+        fill_stat_from_vstat(ls, &vs);
+        return 0;
+    }
+
+    /* ── 263: unlinkat ───────────────────────────────────────────────────── */
+    case SYS_UNLINKAT: {
+        int         dirfd = (int)a1;
+        const char *path  = (const char *)(uintptr_t)a2;
+        int         flags = (int)a3;
+        if (!path) RET_ERR(EFAULT);
+        char rp[512];
+        if (at_resolve(proc, dirfd, path, rp, sizeof(rp)) < 0) RET_ERR(ENOENT);
+        if (flags & 0x200) {           /* AT_REMOVEDIR */
+            vfs_node_t *dn = vfs_open(rp, 0);
+            if (!dn) RET_ERR(ENOENT);
+            if (!(dn->type & VFS_NODE_DIR)) { vfs_close(dn); RET_ERR(ENOTDIR); }
+            vfs_close(dn);
+        }
+        return (vfs_unlink(rp) == 0) ? 0 : (uint64_t)(-ENOENT);
+    }
+
+    /* ── 264: renameat ───────────────────────────────────────────────────── */
+    case SYS_RENAMEAT: {
+        int         olddirfd = (int)a1;
+        const char *oldpath  = (const char *)(uintptr_t)a2;
+        int         newdirfd = (int)a3;
+        const char *newpath  = (const char *)(uintptr_t)a4;
+        if (!oldpath || !newpath) RET_ERR(EFAULT);
+        char op[512], np[512];
+        if (at_resolve(proc, olddirfd, oldpath, op, sizeof(op)) < 0) RET_ERR(ENOENT);
+        if (at_resolve(proc, newdirfd, newpath, np, sizeof(np)) < 0) RET_ERR(ENOENT);
+        /* Implement via copy + delete (matching SYS_RENAME behaviour) */
+        return syscall_dispatch(SYS_RENAME,
+                                (uint64_t)(uintptr_t)op,
+                                (uint64_t)(uintptr_t)np,
+                                0, 0, 0);
+    }
+
+    /* ── 265: linkat — no hard links ─────────────────────────────────────── */
+    case SYS_LINKAT:
+        RET_ERR(EPERM);
+
+    /* ── 266: symlinkat — no symlinks ────────────────────────────────────── */
+    case SYS_SYMLINKAT:
+        RET_ERR(EPERM);
+
+    /* ── 267: readlinkat ─────────────────────────────────────────────────── */
+    case SYS_READLINKAT: {
+        int         dirfd = (int)a1;
+        const char *path  = (const char *)(uintptr_t)a2;
+        char       *buf   = (char *)(uintptr_t)a3;
+        size_t      bufsz = (size_t)a4;
+        if (!path || !buf) RET_ERR(EFAULT);
+        char rp[512];
+        if (at_resolve(proc, dirfd, path, rp, sizeof(rp)) < 0) RET_ERR(ENOENT);
+        size_t n = sc_strlen(rp);
+        if (n > bufsz) n = bufsz;
+        for (size_t i = 0; i < n; i++) buf[i] = rp[i];
+        return (int64_t)n;
+    }
+
+    /* ── 268: fchmodat — no-op ───────────────────────────────────────────── */
+    case SYS_FCHMODAT:
+        return 0;
+
+    /* ── 269: faccessat ──────────────────────────────────────────────────── */
+    case SYS_FACCESSAT: {
+        int         dirfd = (int)a1;
+        const char *path  = (const char *)(uintptr_t)a2;
+        if (!path) RET_ERR(EFAULT);
+        char rp[512];
+        if (at_resolve(proc, dirfd, path, rp, sizeof(rp)) < 0) RET_ERR(ENOENT);
+        vfs_node_t *node = vfs_open(rp, 0);
+        if (!node) RET_ERR(ENOENT);
+        vfs_close(node);
+        return 0;
+    }
+
+    /* ── 270: pselect6 — instant poll, no blocking ───────────────────────── */
+    case SYS_PSELECT6:
+        return 0;
+
+    /* ── 271: ppoll ──────────────────────────────────────────────────────── */
+    case SYS_PPOLL: {
+        typedef struct { int fd; short events; short revents; } pollfd_t;
+        pollfd_t *pfds = (pollfd_t *)(uintptr_t)a1;
+        int nfds = (int)a2;
+        if (!pfds || nfds <= 0) return 0;
+        int ready = 0;
+        for (int i = 0; i < nfds; i++) {
+            pfds[i].revents = 0;
+            if (proc && pfds[i].fd >= 0 && pfds[i].fd < MAX_FDS
+                && proc->fds[pfds[i].fd]) {
+                if (pfds[i].events & 0x01) { pfds[i].revents |= 0x01; ready++; }
+                if (pfds[i].events & 0x04) { pfds[i].revents |= 0x04; ready++; }
+            }
+        }
+        return ready;
+    }
+
+    /* ── 272: unshare — no-op ────────────────────────────────────────────── */
+    case SYS_UNSHARE:
+        return 0;
+
+    /* ── 280: utimensat — accept ─────────────────────────────────────────── */
+    case SYS_UTIMENSAT:
+        return 0;
+
+    /* ── 285: fallocate — extend file size ───────────────────────────────── */
+    case SYS_FALLOCATE: {
+        int     fd  = (int)a1;
+        int64_t off = (int64_t)a2;
+        int64_t len = (int64_t)a3;
+        if (!proc || fd < 0 || fd >= MAX_FDS || !proc->fds[fd]) RET_ERR(EBADF);
+        uint64_t new_end = (uint64_t)(off + len);
+        if (proc->fds[fd]->size < new_end) proc->fds[fd]->size = new_end;
+        return 0;
+    }
+
+    /* ── 290: eventfd2 — return dummy fd ─────────────────────────────────── */
+    case SYS_EVENTFD2: {
+        if (!proc) RET_ERR(ENOMEM);
+        vfs_node_t *node = vfs_open("/dev/null", 0);
+        if (!node) RET_ERR(ENOMEM);
+        int fd = proc_open_fd(proc, node);
+        if (fd < 0) { vfs_close(node); RET_ERR(EMFILE); }
+        return (uint64_t)fd;
+    }
+
+    /* ── 292: dup3 ───────────────────────────────────────────────────────── */
+    case SYS_DUP3: {
+        int oldfd = (int)a1;
+        int newfd = (int)a2;
+        /* int flags = (int)a3; O_CLOEXEC — ignore for now */
+        if (!proc || oldfd < 0 || oldfd >= MAX_FDS || !proc->fds[oldfd])
+            RET_ERR(EBADF);
+        if (newfd < 0 || newfd >= MAX_FDS) RET_ERR(EBADF);
+        if (oldfd == newfd) RET_ERR(EINVAL);
+        if (proc->fds[newfd]) proc_close_fd(proc, newfd);
+        proc->fds[newfd]        = proc->fds[oldfd];
+        proc->fd_offsets[newfd] = proc->fd_offsets[oldfd];
+        return (uint64_t)newfd;
+    }
+
+    /* ── 293: pipe2 — delegate to pipe (ignore flags) ────────────────────── */
+    case SYS_PIPE2:
+        return syscall_dispatch(SYS_PIPE, a1, 0, 0, 0, 0);
+
+    /* ── 302: prlimit64 ──────────────────────────────────────────────────── */
+    case SYS_PRLIMIT64: {
+        /* pid=a1, resource=a2, new_limit=a3(ignored), old_limit=a4 */
+        struct rlim64 { uint64_t cur; uint64_t max; };
+        struct rlim64 *old = (struct rlim64 *)(uintptr_t)a4;
+        if (old) {
+            switch ((int)a2) {
+            case 3:  /* RLIMIT_STACK   */
+                old->cur = 8ULL * 1024 * 1024;
+                old->max = 0xFFFFFFFFFFFFFFFFULL;
+                break;
+            case 7:  /* RLIMIT_NOFILE  */
+                old->cur = MAX_FDS;
+                old->max = MAX_FDS;
+                break;
+            case 9:  /* RLIMIT_MEMLOCK */
+                old->cur = 64 * 1024;
+                old->max = 64 * 1024;
+                break;
+            default:
+                old->cur = 0xFFFFFFFFFFFFFFFFULL;
+                old->max = 0xFFFFFFFFFFFFFFFFULL;
+                break;
+            }
+        }
+        return 0;
+    }
+
+    /* ── 318: getrandom — RDTSC-based entropy ────────────────────────────── */
+    case SYS_GETRANDOM: {
+        uint8_t *buf   = (uint8_t *)(uintptr_t)a1;
+        size_t   count = (size_t)a2;
+        if (!buf) RET_ERR(EFAULT);
+        for (size_t i = 0; i < count; i++) {
+            uint32_t lo, hi;
+            __asm__ volatile("rdtsc" : "=a"(lo), "=d"(hi));
+            uint64_t tsc = ((uint64_t)hi << 32) | lo;
+            buf[i] = (uint8_t)((tsc ^ (tsc >> 17) ^ ((uint64_t)i * 0x9E3779B9ULL)) & 0xFF);
+        }
+        return (int64_t)count;
+    }
+
+    /* ── 322: execveat — resolve path, delegate to execve ────────────────── */
+    case SYS_EXECVEAT: {
+        int         dirfd = (int)a1;
+        const char *path  = (const char *)(uintptr_t)a2;
+        if (!path) RET_ERR(EFAULT);
+        char rp[512];
+        if (at_resolve(proc, dirfd, path, rp, sizeof(rp)) < 0) RET_ERR(ENOENT);
+        return syscall_dispatch(SYS_EXECVE,
+                                (uint64_t)(uintptr_t)rp,
+                                a3, a4, 0, 0);
+    }
+
+    /* ── 332: statx — fill from VFS stat ─────────────────────────────────── */
+    case SYS_STATX: {
+        int         dirfd = (int)a1;
+        const char *path  = (const char *)(uintptr_t)a2;
+        /* int flags = (int)a3;  uint32_t mask = (uint32_t)a4; */
+        uint8_t    *sx    = (uint8_t *)(uintptr_t)a5;
+        if (!sx) RET_ERR(EFAULT);
+        for (int i = 0; i < 256; i++) sx[i] = 0;
+        linux_stat_t ls;
+        if (!path || path[0] == '\0') {
+            if (proc && dirfd >= 0 && dirfd < MAX_FDS && proc->fds[dirfd])
+                fill_stat_from_node(&ls, proc->fds[dirfd]);
+            else
+                RET_ERR(EBADF);
+        } else {
+            char rp[512];
+            if (at_resolve(proc, dirfd, path, rp, sizeof(rp)) < 0) RET_ERR(ENOENT);
+            vfs_stat_t vs;
+            if (vfs_stat(rp, &vs) != 0) RET_ERR(ENOENT);
+            fill_stat_from_vstat(&ls, &vs);
+        }
+        /* statx layout: stx_mask(u32), stx_blksize(u32), stx_attributes(u64),
+           stx_nlink(u32), stx_uid(u32), stx_gid(u32), stx_mode(u16), pad(u16),
+           stx_ino(u64), stx_size(u64), stx_blocks(u64) ... */
+        uint32_t *u32 = (uint32_t *)sx;
+        uint64_t *u64 = (uint64_t *)sx;
+        u32[0] = 0x7FFu;                        /* stx_mask: all valid */
+        u32[1] = (uint32_t)ls.st_blksize;       /* stx_blksize */
+        /* u64[1] = stx_attributes = 0 */
+        u32[4] = (uint32_t)ls.st_nlink;         /* stx_nlink */
+        u32[5] = 0;                              /* stx_uid */
+        u32[6] = 0;                              /* stx_gid */
+        *(uint16_t *)&u32[7] = (uint16_t)ls.st_mode; /* stx_mode */
+        u64[4] = (uint64_t)ls.st_ino;           /* stx_ino */
+        u64[5] = (uint64_t)ls.st_size;          /* stx_size */
+        u64[6] = (uint64_t)ls.st_blocks;        /* stx_blocks */
+        return 0;
+    }
 
     /* ── Unknown ─────────────────────────────────────────────────────────── */
     default:
