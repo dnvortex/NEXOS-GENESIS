@@ -596,8 +596,8 @@ uint64_t syscall_dispatch(uint64_t num, uint64_t a1, uint64_t a2, uint64_t a3,
 
     /* ── 59: execve ──────────────────────────────────────────────────────── */
     case SYS_EXECVE:
-        klog(LOG_DEBUG, "sys_execve() -> ENOSYS (not yet implemented)");
-        RET_ERR(ENOSYS);
+        klog(LOG_DEBUG, "sys_execve(path=%s)", (char *)a1);
+        return proc_exec((char*)a1, (char**)a2);
 
     /* ── 60: exit ────────────────────────────────────────────────────────── */
     case SYS_EXIT:

@@ -1514,20 +1514,31 @@ static int nsh_exec_builtin(int argc, char *argv[]) {
                                        { launch_sysinfo();    return 0; }
     }
 
-    /* ── PATH-based script lookup: /bin, /usr/bin ── */
+    }
+
+    /* ── Try to exec ELF binary from /bin/<cmd> ── */
     {
-        char spath[512];
-        /* try /bin/<cmd> first */
-        nsh_strcpy(spath, "/bin/", 512);
-        nsh_strcat(spath, cmd, 512);
-        if (!nsh_run_script(spath, argc, argv)) return 0;
-        /* try /usr/bin/<cmd> */
-        nsh_strcpy(spath, "/usr/bin/", 512);
-        nsh_strcat(spath, cmd, 512);
-        if (!nsh_run_script(spath, argc, argv)) return 0;
-        /* try /usr/bin/<cmd>.sh */
-        nsh_strcat(spath, ".sh", 512);
-        if (!nsh_run_script(spath, argc, argv)) return 0;
+        char path[256];
+        nsh_strcpy(path, "/bin/", 256);
+        nsh_strcat(path, cmd, 256);
+        vfs_node_t *node = vfs_open(path, 0);
+        if (node) {
+            vfs_close(node);
+            int pid = proc_fork();
+            if (pid == 0) {
+                // Child: exec the binary
+                if (proc_exec(path, (char **)argv) != 0) {
+                    nsh_print("nsh: exec failed: ");
+                    nsh_println(path);
+                    proc_exit(1);
+                }
+                // Should not return
+            } else {
+                // Parent: wait for child
+                proc_wait(pid);
+            }
+            return 0;
+        }
     }
 
     nsh_print("nsh: command not found: "); nsh_println(cmd);
