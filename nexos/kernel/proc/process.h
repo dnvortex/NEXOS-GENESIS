@@ -72,8 +72,11 @@ void       proc_exit(int code);
 process_t *proc_get_current(void);
 process_t *proc_get_by_pid(uint32_t pid);
 void       proc_kill(uint32_t pid);
-int        proc_open_fd(process_t *proc, vfs_node_t *node);
+void       proc_open_fd(process_t *proc, vfs_node_t *node);
 void       proc_close_fd(process_t *proc, int fd);
+int        proc_fork(void);
+int        proc_exec(const char *path, char **argv);
+int        proc_wait(uint32_t pid);
 
 extern process_t *processes[MAX_PROCESSES];
 extern int        process_count;

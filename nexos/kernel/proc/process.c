@@ -15,6 +15,8 @@
  *   (FIX 6).  No PMM pages are consumed for kernel stacks.
  */
 #include "process.h"
+#include "elf.h"
+#include "scheduler.h"
 #include "../kernel.h"
 #include "../mm/heap.h"
 #include "../mm/pmm.h"
@@ -230,4 +232,77 @@ int proc_open_fd(process_t *proc, vfs_node_t *node) {
 
 void proc_close_fd(process_t *proc, int fd) {
     if (fd >= 0 && fd < MAX_FDS) proc->fds[fd] = NULL;
+}
+
+int proc_fork(void) {
+    // Simple fork for kernel threads: create a new process with same context
+    // But since it's kernel thread, the child will run the same code
+    // For exec, it will change the entry
+    process_t *child = proc_create("forked", (void (*)(void))current_process->context.rip, current_process->priority);
+    if (!child) return -1;
+    // Copy FDs
+    for (int i = 0; i < MAX_FDS; i++) {
+        child->fds[i] = current_process->fds[i];
+    }
+    kstrcpy(child->cwd, current_process->cwd, sizeof(child->cwd));
+    // Set state to ready
+    child->state = PROC_READY;
+    // Add to scheduler
+    extern void scheduler_add(process_t *proc);
+    scheduler_add(child);
+    return child->pid;
+}
+
+int proc_exec(const char *path, char **argv) {
+    // Load ELF
+    uint64_t entry;
+    if (elf_load(path, &entry) != 0) return -1;
+    // Set entry point
+    current_process->context.rip = entry;
+    // For now, ignore argv, assume no args
+    // TODO: set up user stack and argv
+    // Set up user stack at 0x7FFFFFFFE000
+    uint64_t user_stack_top = 0x7FFFFFFFE000;
+    uint64_t user_stack_base = user_stack_top - PAGE_SIZE;
+    // Allocate page for user stack
+    uint64_t phys = pmm_alloc_page();
+    if (!phys) return -1;
+    vmm_map(user_stack_base, phys, VMM_FLAG_USER | VMM_FLAG_WRITE);
+    current_process->user_stack = user_stack_base;
+    current_process->user_stack_top = user_stack_top;
+    // Push argv (simplified, assume no args)
+    // For now, just set rsp to top
+    current_process->context.rsp = user_stack_top;
+    // Set CS to user code
+    current_process->context.cs = GDT_USER_CODE | 3;
+    current_process->context.ss = GDT_USER_DATA | 3;
+    current_process->context.rflags = 0x202;
+    // Set CR3 to kernel for now, but should be separate address space
+    current_process->context.cr3 = 0; // reuse kernel
+    return 0;
+}
+
+int proc_wait(uint32_t pid) {
+    // Simple wait: busy wait until process exits
+    process_t *p = proc_get_by_pid(pid);
+    while (p && p->state != PROC_ZOMBIE) {
+        // Yield or something, but for now, just loop
+        asm volatile ("hlt");
+    }
+    if (p) {
+        int code = p->exit_code;
+        // Remove from processes
+        for (int i = 0; i < MAX_PROCESSES; i++) {
+            if (processes[i] == p) {
+                processes[i] = NULL;
+                process_count--;
+                break;
+            }
+        }
+        // Free resources
+        kfree(p->stack);
+        kfree(p);
+        return code;
+    }
+    return -1;
 }
