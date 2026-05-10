@@ -72,6 +72,13 @@ static void rtl_mem_copy(void *d, const void *s, size_t n) {
     for (size_t i = 0; i < n; i++) dd[i] = ss[i];
 }
 
+/* Memory barrier to ensure DMA coherency */
+static void rtl_io_wait(void) {
+    io_outb(0x80, 0);  /* POST port delay */
+    io_outb(0x80, 0);
+    io_outb(0x80, 0);
+}
+
 /* ── Initialisation ──────────────────────────────────────────────────────── */
 int rtl8139_init(void) {
     /* a) Scan PCI for vendor=0x10EC device=0x8139 */
